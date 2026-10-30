@@ -85,6 +85,7 @@ The trainer never records your screen. It reads text from the **game's own windo
 - **Solo or host only — never when joining a game.** As a guest, your PC holds display copies refreshed from the host every tick; writes there have no effect and can cause problems for other players.
 - **Windows build only.** The browser version is not supported.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
+- Target values live in `session.json` (`config.targets`); a displayed `+N%` is the multiplier `1 + N/100` (for example +200% experience = 3.0). Speed is locked at +50%; experience may be set from 1 to 1,000,000. Extreme values can make the game misbehave (for example many level-ups per second).
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - The card picker is new. Validate it with `cards-test` before relying on it, and report what the popup looks like if it misreads.
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.

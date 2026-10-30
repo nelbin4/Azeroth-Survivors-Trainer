@@ -178,7 +178,8 @@ class AutoBackend:
         for _,off,fmt,value in targets:
             if isinstance(value,bool) or fmt!=('I' if off==120 else 'f') or not math.isfinite(value) or not 0<=value<=1e7 or (fmt=='I' and not isinstance(value,int)):
                 raise AutoBlocked('Invalid target type/value.')
-            if off in (20,28) and value!={20:1.5,28:3.}[off]:raise AutoBlocked('XP must be +200% and speed +50%.')
+            if off==20 and value!=1.5:raise AutoBlocked('Speed must stay at +50%.')
+            if off==28 and not 1<=value<=1e6:raise AutoBlocked('Experience multiplier must be between 1 and 1,000,000.')
         desired={off:value for _,off,_,value in targets}
         if desired[0]<1 or desired[112]>desired[0] or desired[8]<=0:raise AutoBlocked('Invalid target health or cooldown relationship.')
         self.targets=targets;self.recipe['targets']=targets;self.hash_cache={}
