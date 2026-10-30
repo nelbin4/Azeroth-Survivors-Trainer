@@ -15,3 +15,5 @@ venv/
 *.png
 *.log
 _ocr_server.ps1
+.update_backup/
+*.new

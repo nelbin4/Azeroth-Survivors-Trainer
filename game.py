@@ -19,7 +19,10 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.0.0'
+VERSION = '1.1.0'
+REPO = 'nelbin4/Azeroth-Survivors-Trainer'
+UPDATE_FILES = ('game.py', 'card_priorities.json', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
+USER_FILES = ('card_priorities.json',)  # edited by users: an update never overwrites an existing copy
 ROOT = Path(__file__).resolve().parent
 SESSION = ROOT / 'session.json'
 CHECKED_BUILDS = set()
@@ -2385,6 +2388,74 @@ def cards_test():
     print(json.dumps(dict(popup_active=info['active'],cards=[c['text'][:90] for c in info['columns']],
         decision=(lambda r:dict(class_=r[0],choice=r[1]))(choose_for_class([c['text'] for c in info['columns']],load_card_config(),read().get('card_class','auto'))) if info['active'] else None,keys_sent=False),indent=2))
 
+def parse_version(text):
+    return tuple(int(part) for part in text.strip().split('.'))
+
+def http_get(url,limit,timeout):
+    """HTTPS only, size-capped."""
+    import urllib.request
+    if not url.startswith('https://'):raise ValueError('Updates are fetched over HTTPS only.')
+    request=urllib.request.Request(url,headers={'User-Agent':APP_NAME.replace(' ','-')+'/'+VERSION})
+    with urllib.request.urlopen(request,timeout=timeout) as response:
+        data=response.read(limit+1)
+    if len(data)>limit:raise ValueError('Update download is larger than expected.')
+    return data
+
+def apply_update_zip(data,target,current):
+    """Install a GitHub source archive into target if it is newer and its game.py compiles. Returns the new version or None."""
+    import re,zipfile,shutil
+    target=Path(target)
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names=archive.namelist();prefix=names[0].split('/')[0]+'/'
+        files={rel:archive.read(prefix+rel) for rel in UPDATE_FILES if prefix+rel in names}
+    if 'game.py' not in files:raise ValueError('Update archive has no game.py.')
+    source=files['game.py'].decode('utf-8');compile(source,'game.py','exec')  # never install code that does not even compile
+    found=re.search(r"^VERSION = '([\d.]+)'",source,re.M)
+    if not found or parse_version(found.group(1))<=parse_version(current):return None
+    backup=target/'.update_backup'/current;backup.mkdir(parents=True,exist_ok=True)
+    for rel,content in files.items():
+        destination=target/rel
+        if rel in USER_FILES and destination.exists():continue
+        destination.parent.mkdir(parents=True,exist_ok=True)
+        if destination.exists():
+            (backup/rel).parent.mkdir(parents=True,exist_ok=True);shutil.copy2(destination,backup/rel)
+        temporary=destination.with_name(destination.name+'.new');temporary.write_bytes(content);os.replace(temporary,destination)
+    return found.group(1)
+
+def update_from_zip(target=None):
+    import re
+    base=f'https://raw.githubusercontent.com/{REPO}/main/'
+    remote=re.search(r"^VERSION = '([\d.]+)'",http_get(base+'game.py',4000000,6).decode('utf-8'),re.M)
+    if not remote or parse_version(remote.group(1))<=parse_version(VERSION):return None
+    return apply_update_zip(http_get(f'https://github.com/{REPO}/archive/refs/heads/main.zip',20000000,40),target or ROOT,VERSION)
+
+def update_from_git():
+    """Developer checkout: only a clean fast-forward; local work is never touched."""
+    def git(*args):return subprocess.run(['git','-C',str(ROOT),*args],capture_output=True,text=True,timeout=30,creationflags=subprocess.CREATE_NO_WINDOW)
+    if git('fetch','--quiet','origin','main').returncode:return None
+    behind=git('merge-base','--is-ancestor','HEAD','origin/main').returncode==0 and git('rev-parse','HEAD').stdout!=git('rev-parse','origin/main').stdout
+    if not behind or git('status','--porcelain','--untracked-files=no').stdout.strip():return None
+    return 'latest' if git('merge','--ff-only','origin/main').returncode==0 else None
+
+def auto_update():
+    """At startup: fetch the latest release from GitHub. True means files were replaced and the caller should restart."""
+    if os.environ.get('AZEROTH_UPDATED'):return False
+    try:
+        if SESSION.exists() and not read().get('auto_update',True):return False
+        version=update_from_git() if (ROOT/'.git').exists() else update_from_zip()
+    except Exception:return False  # offline or GitHub unreachable: just start normally
+    if version:
+        try:
+            if SESSION.exists():update_session(lambda d:d.update(update_notice=f'Updated to version {version}.'))
+        except Exception:pass
+    return bool(version)
+
+def restart_after_update():
+    subprocess.Popen([sys.executable,str(Path(__file__).resolve()),*sys.argv[1:]],cwd=ROOT,env=dict(os.environ,AZEROTH_UPDATED='1'),
+        stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+        creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW)
+    sys.exit(0)
+
 def configure(game_exe,name):
     """Create or update session.json for this machine: game path and character name."""
     exe=Path(game_exe)
@@ -2451,6 +2522,8 @@ class WatcherWindow:
         ttk.Radiobutton(ctl,text='Write',variable=self.mode,value='write').pack(side='left',padx=6)
         self.cards=tk.BooleanVar(value=read().get('cards_enabled',True))
         ttk.Checkbutton(root,text='Auto-pick level-up cards (priority list)',variable=self.cards,command=lambda:update_session(lambda d:d.update(cards_enabled=bool(self.cards.get())))).pack(anchor='w',padx=12)
+        self.updates=tk.BooleanVar(value=read().get('auto_update',True))
+        ttk.Checkbutton(root,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w',padx=12)
         self.meter=tk.BooleanVar(value=read().get('meter_enabled',True))
         ttk.Checkbutton(root,text='Prefer upgrades for my best spell (reads the damage meter every 20 s)',variable=self.meter,command=lambda:update_session(lambda d:d.update(meter_enabled=bool(self.meter.get())))).pack(anchor='w',padx=12)
         row=ttk.Frame(root);row.pack(anchor='w',padx=12)
@@ -2470,6 +2543,9 @@ class WatcherWindow:
         self.foot=tk.StringVar();ttk.Label(root,textvariable=self.foot).pack(anchor='w',padx=12,pady=(0,8))
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
+        notice=read().get('update_notice')
+        if notice:
+            self.say(notice);update_session(lambda d:d.pop('update_notice',None))
         self.refresh()
         if not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
     def build_rows(self):
@@ -2757,6 +2833,48 @@ def self_test():
         def test_card_spell_is_read_from_the_card_text(self):
             self.assertEqual(card_spell('SPELLS Explosive Trap Rank 8 » 9 +23% area'),'Explosive Trap')
             self.assertEqual(card_spell('Volley Rank 5 » 6'),'Volley')
+        def update_archive(self,version,source=None,extra=None):
+            import zipfile
+            buffer=io.BytesIO()
+            with zipfile.ZipFile(buffer,'w') as archive:
+                archive.writestr('Repo-main/game.py',source if source is not None else f"VERSION = '{version}'\nprint('x')\n")
+                archive.writestr('Repo-main/card_priorities.json','{"shipped": true}')
+                archive.writestr('Repo-main/README.md','new readme')
+                archive.writestr('Repo-main/session.json','must never be installed')
+                archive.writestr('Repo-main/../evil.txt','x')
+            return buffer.getvalue()
+        def test_update_installs_newer_versions_and_keeps_user_files(self):
+            import tempfile
+            with tempfile.TemporaryDirectory() as folder:
+                folder=Path(folder);(folder/'game.py').write_text("VERSION = '1.0.0'\n");(folder/'card_priorities.json').write_text('{"mine": true}');(folder/'session.json').write_text('{"private": true}')
+                self.assertEqual(apply_update_zip(self.update_archive('1.2.0'),folder,'1.0.0'),'1.2.0')
+                self.assertIn("1.2.0",(folder/'game.py').read_text());self.assertEqual((folder/'card_priorities.json').read_text(),'{"mine": true}')
+                self.assertEqual((folder/'session.json').read_text(),'{"private": true}');self.assertEqual((folder/'README.md').read_text(),'new readme')
+                self.assertIn("1.0.0",(folder/'.update_backup'/'1.0.0'/'game.py').read_text());self.assertFalse((folder.parent/'evil.txt').exists())
+        def test_update_ignores_same_or_older_and_rejects_broken_code(self):
+            import tempfile
+            with tempfile.TemporaryDirectory() as folder:
+                folder=Path(folder);(folder/'game.py').write_text("VERSION = '1.1.0'\n")
+                self.assertIsNone(apply_update_zip(self.update_archive('1.1.0'),folder,'1.1.0'))
+                self.assertIsNone(apply_update_zip(self.update_archive('1.0.9'),folder,'1.1.0'))
+                with self.assertRaises(SyntaxError):apply_update_zip(self.update_archive('9.0.0',source="VERSION = '9.0.0'\ndef broken(:\n"),folder,'1.1.0')
+                self.assertEqual((folder/'game.py').read_text(),"VERSION = '1.1.0'\n")
+        def test_restart_relaunches_the_same_command_once(self):
+            calls=[];real=(subprocess.Popen,sys.exit,sys.argv)
+            subprocess.Popen=lambda args,**kw:calls.append((args,kw));sys.argv=['game.py','gui']
+            def fake_exit(code=0):raise SystemExit(code)
+            sys.exit=fake_exit
+            try:
+                with self.assertRaises(SystemExit):restart_after_update()
+            finally:subprocess.Popen,sys.exit,sys.argv=real
+            args,kw=calls[0]
+            self.assertEqual(args[-1],'gui');self.assertEqual(kw['env']['AZEROTH_UPDATED'],'1')
+            os.environ['AZEROTH_UPDATED']='1'
+            try:self.assertFalse(auto_update())  # the flag prevents an update loop after a restart
+            finally:del os.environ['AZEROTH_UPDATED']
+        def test_versions_compare_numerically_and_http_is_refused(self):
+            self.assertTrue(parse_version('1.10.0')>parse_version('1.9.9'))
+            with self.assertRaises(ValueError):http_get('http://example.com/x',10,1)
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
@@ -2993,7 +3111,10 @@ if __name__ == '__main__':
     elif sys.argv[1] == '--background':
         sys.argv.insert(1, 'auto')  # `python game.py --background` = silent automatic watcher
     command = sys.argv[1]
+    if '--no-update' in sys.argv:sys.argv.remove('--no-update');os.environ['AZEROTH_UPDATED']='1'
     try:
+        if command=='gui' or (command=='auto' and '--background' in sys.argv):
+            if auto_update():restart_after_update()
         if command not in ('setup','self-test','version','--version','--help','-h','help','gui'):ensure_configured()
         if command in ('start','_worker','named-core','_named_core','source-apply','lifesteal-test','apply-once','apply-host','capture','numeric-watch','text-watch','inspect-copy','observe-swaps','discover') and auto_alive(read()):
             raise RuntimeError('Automatic watcher is active. Stop it before running a competing writer or debugger.')

@@ -40,6 +40,15 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 - **Level-up card picker (experimental).** Reads the popup from a background window capture with Windows' built-in text recognition, picks by your priority list, and presses the card's number key (the game's own hotkeys: 1–3 or 1–4). It never rerolls and never skips. It reads the popup in a fraction of a second. Nothing is shown on or moved on your screen.
 - **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
 
+## Updates
+
+At startup (the window, or `--background`) the trainer checks GitHub for a newer version, downloads it, checks that the new code compiles, replaces the program files, and restarts itself. This takes a couple of seconds and is skipped silently when you are offline.
+
+- **What is replaced:** `game.py`, the docs, `profile.example.json`, `requirements.txt`. Your `session.json`, saves and **your edited `card_priorities.json` are never touched** (delete that file to get new default priorities). Replaced files are backed up in `.update_backup/<old version>/`.
+- **Git checkouts** (developers) only fast-forward when you have no uncommitted changes.
+- **Trust:** updates come over HTTPS from this repository's `main` branch. Switch it off with the window's *Check GitHub for updates* box, or `"auto_update": false` in `session.json`, or start with `--no-update`.
+- If an update adds a new dependency, run `pip install -r requirements.txt` after it.
+
 ## Using it
 
 | Command | What it does |
@@ -103,7 +112,7 @@ The trainer never records your screen. It reads text from the **game's own windo
 ## Development
 
 ```bash
-python game.py self-test    # 48 tests, no game required
+python game.py self-test    # 52 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.

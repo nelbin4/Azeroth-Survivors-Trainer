@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 — 2026-10-31
+
+- Automatic updates: at startup it checks GitHub, downloads and verifies the new version, installs it (keeping your settings and edited card priorities) and restarts. Can be switched off in the window.
+
 ## 1.0.0 — 2026-10-30
 
 First release as **Azeroth Survivors Trainer**.
