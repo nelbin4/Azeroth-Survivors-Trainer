@@ -1,0 +1,182 @@
+{
+  "format_version": 2,
+  "game_exe": "",
+  "game_sha256": "DE7147A2A3A01B4FB84F3A7F036BC940F9E7D4FDFC42A7FDB79F3F1B2BD798BE",
+  "config": {
+    "pid": 0,
+    "created": 0,
+    "base": 0,
+    "player_id": 0,
+    "owner": 0,
+    "pointer": 0,
+    "capacity": 8,
+    "length": 8,
+    "kinds": [],
+    "selectors": [],
+    "level": 1,
+    "targets": [
+      [
+        "Max Health",
+        0,
+        "f",
+        9999.0
+      ],
+      [
+        "Damage",
+        4,
+        "f",
+        100.99
+      ],
+      [
+        "Haste",
+        8,
+        "f",
+        0.0001
+      ],
+      [
+        "Crit",
+        12,
+        "f",
+        99.99
+      ],
+      [
+        "Crit Damage",
+        16,
+        "f",
+        99.99
+      ],
+      [
+        "Speed",
+        20,
+        "f",
+        1.5
+      ],
+      [
+        "Pickup",
+        24,
+        "f",
+        9999.0
+      ],
+      [
+        "Experience",
+        28,
+        "f",
+        3.0
+      ],
+      [
+        "Armor",
+        32,
+        "f",
+        1.0
+      ],
+      [
+        "Regeneration",
+        36,
+        "f",
+        9999.0
+      ],
+      [
+        "Area",
+        40,
+        "f",
+        100.99
+      ],
+      [
+        "Luck",
+        44,
+        "f",
+        99.99
+      ],
+      [
+        "Gold Bonus",
+        48,
+        "f",
+        100.99
+      ],
+      [
+        "Targets",
+        52,
+        "I",
+        9999
+      ],
+      [
+        "Echo",
+        56,
+        "f",
+        99.99
+      ],
+      [
+        "Kill Heal",
+        60,
+        "f",
+        9999.0
+      ],
+      [
+        "Buff Power",
+        64,
+        "f",
+        99.99
+      ],
+      [
+        "DoT Bonus",
+        68,
+        "I",
+        9998
+      ],
+      [
+        "DoT Haste",
+        72,
+        "f",
+        99.99
+      ],
+      [
+        "Current Health",
+        112,
+        "f",
+        9999.0
+      ],
+      [
+        "Gold Wallet",
+        120,
+        "I",
+        999999
+      ]
+    ],
+    "bonuses": [],
+    "stabilized_batches": false,
+    "refresh_owned_vector": false
+  },
+  "native_identity_recipe": {
+    "build": "DE7147A2A3A01B4FB84F3A7F036BC940F9E7D4FDFC42A7FDB79F3F1B2BD798BE",
+    "name_header_offset": 432,
+    "stats_offset": 1224,
+    "name": "<set with: python game.py setup>"
+  },
+  "learned_builds": {
+    "8829953418a4d996cc5287f0e9fad25407ca30ceb64d105a4f57833caef78016": {
+      "delta": 792,
+      "owner_offset": 1040,
+      "skip_offsets": [
+        120
+      ],
+      "learned": 1793337866.1752172,
+      "samples": 3,
+      "level": 1,
+      "field_offsets": {
+        "Area": 40,
+        "Armor": 32,
+        "Crit": 12,
+        "Crit Damage": 16,
+        "Damage": 4,
+        "Echo": 56,
+        "Pickup": 24,
+        "Regeneration": 36,
+        "Speed": 20
+      },
+      "wallet_offset": 124,
+      "wallet_confirmed": true,
+      "wallet_evidence": "user-reported 125, ~30, 400+ matched monotonic +124 log; +904 mirrors it"
+    }
+  },
+  "cards_enabled": true
+}

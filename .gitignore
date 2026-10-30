@@ -1,0 +1,16 @@
+# Personal runtime state: game path, character, run backups, traces
+session.json
+session.*.json
+gui-error.log
+_ocr.ps1
+# Game saves and research archives
+*.sav
+recovery.zip
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+# Captures and scratch
+*.png
+*.log
