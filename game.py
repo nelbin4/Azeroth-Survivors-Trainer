@@ -168,7 +168,7 @@ class AutoBackend:
         self.data=data;self.signal=signal;self.process=None;self.memory=None;self.generation=None
         self.recipe=dict(data.get('native_identity_recipe',{}));self.name=data.get('last_name') or self.recipe.get('name')
         if not self.name or self.name.startswith('<'):self.name=None  # automatic: detected from memory
-        self.detect_next=0;self.ambiguous_names=None
+        self.detect_next=0;self.ambiguous_names=None;self.scene=None;self.scene_next=0;self.scene_busy=False
         if self.recipe.get('build','').lower()!=data['game_sha256'].lower():raise AutoBlocked('Identity recipe/build mismatch.')
         targets=[t for t in data['config']['targets'] if t[1] in AUTO_CORE_OFFSETS]
         if len(targets)!=len(AUTO_CORE_OFFSETS) or {t[1] for t in targets}!=AUTO_CORE_OFFSETS:
@@ -311,6 +311,20 @@ class AutoBackend:
     def at(self,base):
         # Discovery never gets the relaxed health rule for an unknown identity.
         return actor_snapshot(self.memory,self.process,base,self.recipe,self.name)
+    def refresh_scene(self,now):
+        """While no character is found: look at the screen (background capture) to say lobby, menu or unknown."""
+        if now<self.scene_next or self.scene_busy or self.process is None:return
+        self.scene_next=now+10;self.scene_busy=True;pid=self.process.pid
+        def job():
+            import tempfile
+            try:
+                handle=game_window(pid)
+                if handle:
+                    path=Path(tempfile.gettempdir())/'azeroth_scene.png'
+                    width,height=capture_window(handle,path);self.scene=detect_scene(ocr_lines(path),width,height)
+            except Exception:self.scene=None
+            finally:self.scene_busy=False
+        threading.Thread(target=job,daemon=True).start()
     def detect_character(self,now):
         """No usable name yet (or it was not found): look for any valid character record and adopt its name."""
         if now<self.detect_next:return []
@@ -442,14 +456,18 @@ class AutoRecovery:
                 self.state=self.backend.learn(now);return self.state
             if self.candidate is None:
                 candidates=self.backend.seek(now)
+                if not candidates and hasattr(self.backend,'refresh_scene'):self.backend.refresh_scene(now)
                 if len(candidates)>1:
                     picked=self.pick_live(candidates)
                     if picked is not None:candidates=[picked]
                 if len(candidates)!=1:
                     self.state=dict(state='blocked_ambiguous' if candidates or getattr(self.backend,'ambiguous_names',None) else 'seeking_record',candidates=len(candidates))
                     if getattr(self.backend,'ambiguous_names',None):self.state['names']=self.backend.ambiguous_names
+                    scene=getattr(self.backend,'scene',None)
+                    if self.state['state']=='seeking_record' and scene in ('lobby','menu'):self.state.update(state='in_'+scene)
                     return self.state
                 self.candidate=candidates[0];self.last_level=self.candidate['level'];self.baseline=self.last_level
+                if hasattr(self.backend,'scene'):self.backend.scene=None
                 self.last_values=dict(self.candidate.get('values',{}))
                 self.confirmations=1;self.last_progress=now;self.state=dict(state='waiting_progress',level=self.last_level);return self.state
             fresh=self.backend.snapshot(self.candidate)
@@ -565,7 +583,7 @@ def auto_command():
                             if state.get('state')=='applying' and not args.trace_only and backend.injected:
                                 current['auto_last_verified']=dict(pid=c['pid'],created=c['created'],base=c['base'],player_id=c['player_id'],build=backend.build,time=time.time())
                     update_session(publish);last_save=time.monotonic();last_saved=state.get('state')
-                signal.wait(.05 if state.get('state')=='learning' and state.get('phase')=='scan' else .1 if state.get('state')=='seeking_record' else (2 if state.get('state') in ('waiting_process','blocked') else 1. if state.get('state')=='waiting_progress' else .4))
+                signal.wait(.05 if state.get('state')=='learning' and state.get('phase')=='scan' else .1 if state.get('state')=='seeking_record' else 1. if state.get('state') in ('in_lobby','in_menu') else (2 if state.get('state') in ('waiting_process','blocked') else 1. if state.get('state')=='waiting_progress' else .4))
             runtime.update(state='stopped' if signal.wait(0) else 'expired',heartbeat=time.time())
         except (KeyboardInterrupt,InterruptedError):runtime.update(state='stopped',heartbeat=time.time())
         except Exception as error:runtime.update(state='failed',reason=str(error),heartbeat=time.time())
@@ -1962,6 +1980,7 @@ def find_wallet():
 CARD_SPELLS = ('consecration', 'redemption', 'holy wrath', 'holy shock', 'hammer of justice', 'divine shield')
 CARD_UPGRADES = ('area', 'cooldown', 'luck')
 OCR_SCRIPT = r"""param([string]$Path)
+[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null=[Windows.Storage.StorageFile,Windows.Storage,ContentType=WindowsRuntime]
 $null=[Windows.Media.Ocr.OcrEngine,Windows.Foundation,ContentType=WindowsRuntime]
@@ -2016,9 +2035,9 @@ def ocr_lines(path):
     script=ROOT/'_ocr.ps1'
     if not script.exists() or script.read_text(encoding='utf-8')!=OCR_SCRIPT:script.write_text(OCR_SCRIPT,encoding='utf-8')
     run=subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',str(script),'-Path',str(path)],
-        capture_output=True,text=True,creationflags=subprocess.CREATE_NO_WINDOW,timeout=30)
+        capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW,timeout=30)
     lines=[]
-    for row in run.stdout.splitlines():
+    for row in run.stdout.decode('utf-8',errors='replace').splitlines():
         box,_,text=row.partition('|')
         try:x1,y1,x2,y2=[int(v) for v in box.split(',')]
         except ValueError:continue
@@ -2117,6 +2136,16 @@ def window_player_name(pid,names):
             if fuzzy_in(text.lower(),name.lower()):return name
     return None
 
+def detect_scene(lines,width,height):
+    """What is on screen? 'level_up', 'lobby', 'menu' or 'unknown', from OCR lines (x1,y1,x2,y2,text)."""
+    import re
+    text=' '.join(t for *_,t in lines).lower()
+    header=' '.join(t for x1,y1,x2,y2,t in lines if y1<height*.45).lower()
+    if 'level up' in header:return 'level_up'
+    if re.search(r'\blobby\b|waiting for (?:the )?(?:host|players?)|\binvite (?:code|link)|party members',text):return 'lobby'
+    if sum(word in text for word in ('collection','drop tables','codex','talents','achievements','armory','rewards'))>=3:return 'menu'
+    return 'unknown'
+
 def cards_test():
     """Dry run: capture the game window, read the popup and say what would be chosen. Presses nothing."""
     data=read();matches=[p for p in psutil.process_iter(['exe']) if p.info['exe'] and os.path.normcase(p.info['exe'])==os.path.normcase(data['game_exe'])]
@@ -2170,7 +2199,7 @@ def effective_targets(data,digest):
 
 class WatcherWindow:
     """Small Tk front end: starts/stops the background watcher and shows its state and live values."""
-    COLORS={'applying':'#2e7d32','waiting_progress':'#b26a00','learning':'#1565c0','learned':'#1565c0','seeking_record':'#6b6b6b','blocked':'#c62828','blocked_ambiguous':'#c62828','recovering':'#c62828','waiting_process':'#6b6b6b','stopped':'#6b6b6b','expired':'#6b6b6b','failed':'#c62828'}
+    COLORS={'in_lobby':'#1565c0','in_menu':'#6b6b6b','applying':'#2e7d32','waiting_progress':'#b26a00','learning':'#1565c0','learned':'#1565c0','seeking_record':'#6b6b6b','blocked':'#c62828','blocked_ambiguous':'#c62828','recovering':'#c62828','waiting_process':'#6b6b6b','stopped':'#6b6b6b','expired':'#6b6b6b','failed':'#c62828'}
     def __init__(self,root):
         import tkinter as tk
         from tkinter import ttk
@@ -2418,6 +2447,19 @@ def self_test():
                 address=0x100000;size=0x20000;is_readable=True;is_writable=True;is_executable=False
             memory.snapshot_memory_regions=lambda:[Region()]
             self.assertEqual(find_characters(memory,proc,dict(recipe,owner_offset=968)),[])
+        def test_scene_detection(self):
+            def lines(*texts,y=100):return [(10,y+i*40,200,y+i*40+30,t) for i,t in enumerate(texts)]
+            self.assertEqual(detect_scene(lines('Collection','Drop Tables','Codex','Talents','Nelbin'),2000,1360),'menu')
+            self.assertEqual(detect_scene(lines('Co-op lobby','Waiting for players','Start'),2000,1360),'lobby')
+            self.assertEqual(detect_scene(lines('LEVEL UP!','Choose a spell'),2000,1360),'level_up')
+            self.assertEqual(detect_scene(lines('Nelbin','Zurubesh'),2000,1360),'unknown')
+        def test_state_reports_menu_and_lobby_until_a_record_appears(self):
+            backend,clock,engine=self.recovery_fixture();backend.absent=True;backend.scene='menu'
+            self.assertEqual(engine.step()['state'],'in_menu')
+            backend.scene='lobby';self.assertEqual(engine.step()['state'],'in_lobby')
+            backend.scene=None;self.assertEqual(engine.step()['state'],'seeking_record')
+            backend.absent=False;backend.scene='menu'
+            self.assertEqual(engine.step()['state'],'waiting_progress');self.assertIsNone(backend.scene)
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')

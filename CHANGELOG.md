@@ -10,7 +10,8 @@ First release as **Azeroth Survivors Trainer**.
 - Duplicate-record resolution by observed activity.
 - Experimental level-up card picker using background window capture and Windows text recognition (`cards-test` dry run).
 - First-run setup (`setup` command or window prompts); personal state kept in the git-ignored `session.json`.
+- The state shows `in menu` / `in lobby` when no run is active (screen read by background capture).
 - Automatic character detection (no fixed name needed); remembers names it has seen.
 - Efficiency: batched session writes, adaptive polling, per-build hints, bounded `session.json` size.
-- 34 built-in tests (`python game.py self-test`); Windows CI.
+- 36 built-in tests (`python game.py self-test`); Windows CI.
 - Removed the legacy process-pausing commands.
