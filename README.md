@@ -1,12 +1,12 @@
 # Azeroth Survivors Trainer
 
-A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game. It has a small window, a silent background mode, and a command line.
+A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game, and shows whether you are in a menu, a lobby or a run. It has a small window, a silent background mode, and a command line.
 
 ## Install
 
 ### Option A: the Windows program (no Python needed)
 
-Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. Everything below applies the same way (the first-run prompts, the window, updates). Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
+Download the release zip from the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases) (if no release is listed yet, use Option B, or build the exe yourself: see Development), unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. Everything below applies the same way (the first-run prompts, the window, updates). The first start takes a few seconds while the bundled libraries unpack. Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
 
 > Windows SmartScreen or your antivirus may warn about an unsigned program that reads another program's memory. That is expected for any trainer; the source of everything is in this repository.
 
@@ -42,10 +42,12 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 ## What it does
 
 - **Automatic character detection.** Finds your character in memory by structure, not by a fixed name. In a solo run it is the only character; when hosting with others it picks the one listed first in your player frame (read from a background capture). Names it has seen are remembered.
-- **Stat trainer.** Keeps max/current HP, damage, crit, crit damage, speed, XP, regeneration, luck, gold and more at your targets. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups.
+- **Stat trainer.** Keeps these at your targets: max and current HP, damage, haste, crit, crit damage, speed, pickup range, experience, armor, regeneration, area, luck, gold bonus, extra targets, echo, kill heal, buff power, DoT stacks, DoT haste and the gold wallet. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups. The shipped targets are 9999-style maximums, except speed (+50%) and experience (+200%), which you can raise in `session.json`. See Limitations for what is not covered.
 - **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only.
 - **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
+- **Menu / lobby awareness.** While no run is active the state says *in menu* or *in lobby* instead of just waiting.
 - **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
+- **Self-updating.** Checks GitHub at startup (see Updates).
 
 ## Updates
 
@@ -68,6 +70,7 @@ At startup (the window, or `--background`) the trainer checks GitHub for a newer
 | `python game.py find-wallet --gold 1234` | Learns the gold counter's location from an exact gold amount (read-only). |
 | `python game.py self-test` | Runs the built-in test suite. |
 | `python game.py --version` | Shows the version. |
+| `python game.py --no-update` | Not a command: add `--no-update` after any command (for example `python game.py gui --no-update`) to skip the startup update check. |
 
 In the window you can switch **Observe only / Write**, **Start / Stop**, and include or exclude each stat. Closing the window leaves the watcher running; press **Stop** to end it.
 
@@ -89,6 +92,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **Windows build only.** The browser version is not supported.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Target values live in `session.json` (`config.targets`); a displayed `+N%` is the multiplier `1 + N/100` (for example +200% experience = 3.0). Speed is locked at +50%; experience may be set from 1 to 1,000,000. Extreme values can make the game misbehave (for example many level-ups per second).
+- **Not covered:** lives, thorns, lifesteal, vs elites and pet damage. They are not plain fields in the character record (they come from its modifier list, which the game rebuilds), so the trainer leaves them alone.
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.
 
@@ -100,6 +104,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **State "blocked ambiguous" with several names** — more than one character is in the game and yours could not be told apart; pin your name with `setup --name`.
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
+- **The exe does not start** — keep `game.py` in the same folder as the exe; the message box tells you if it is missing. Antivirus or SmartScreen may need an exception for an unsigned program.
 - Errors from the window are written to `gui-error.log`.
 
 ## Development

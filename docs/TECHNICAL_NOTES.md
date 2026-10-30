@@ -317,3 +317,44 @@ These changes are runtime memory updates. Persistence in a save or across execut
 ## Name-free character detection (tried, rejected)
 
 Scanning memory for the stat block by structure alone (player ID, level, plausible stats, modifier table) was tried on a live game in the main menu. It found many records, not only the player: enemies and stale records from earlier runs share the same structure (for example max health 22.4 at level 1, IDs 33 and 166). It also took about 53 seconds per scan. A character is distinguished by the name header stored next to its stats, so automatic detection keys on the presence of a valid name header, not on a configured name. That scan takes about 17 seconds and needs no name from the user.
+
+
+## Current build layout (executable SHA-256 8829953418A4D996CC5287F0E9FAD25407CA30CEB64D105A4F57833CAEF78016)
+
+Learned automatically by the trainer and verified against the on-screen character sheet:
+
+| Item | Location |
+| --- | --- |
+| Name header (capacity, pointer, length) | 792 bytes before max HP |
+| Stat block | Unchanged from the previous build for offsets 0..112 (max HP, damage, haste, crit, crit damage, speed, pickup, XP, armor, regeneration, area, luck, gold bonus, extra targets, echo, kill heal, buff power, DoT stacks, DoT haste, level, current HP) |
+| Modifier owner (capacity, pointer, length) | Moved from +968 to **+1040** |
+| Gold wallet | Moved from +120 to **+124** (+120 now holds a sentinel). A separate, steadily rising counter at +904 mirrors lifetime gold and is not the wallet. |
+
+Observations: extra targets is stored as the displayed value (+1 shows as 1). Extreme target and stack counts were applied in a hosted run and the game was still running at the next check; their long-term effect is untested and they may be heavy for the game.
+
+## Guest games (why the trainer refuses them)
+
+As a guest the character record on the local PC is not authoritative. Only a partial client copy exists (current HP and gold, other stats zero, player id 5), and it is refreshed from the network every tick. A write loop holding the wallet copy at 999,999 for 20 seconds changed nothing on screen, and the value returned to the host's number when the loop stopped. Searching memory for the stat sheet values found no matching block. Stats can only be changed while hosting or playing solo.
+
+## Stats that are not plain fields (not covered)
+
+Lives, thorns, lifesteal, vs elites and pet damage are not in the fixed stat block. Lifesteal and shielded are entries (kind byte plus float) in the modifier vector, which holds about six entries with room for two more. The game rebuilds that vector on level-ups and equipment changes, so appended entries do not persist; this is why replacing the vector was dropped. Locating lives would need a change to track (its value is 0).
+
+## Screen reading findings
+
+Kept here in case screen reading is ever extended.
+
+- `PrintWindow` on the game window returns real pixels (OpenGL window, no black frame), with no focus change and no cursor movement.
+- Windows' built-in OCR (`Windows.Media.Ocr`) runs fine from PowerShell. A persistent helper process avoids about a second of start-up per read; reads take roughly 130-350 ms. Output must be read as UTF-8: some in-game text is not cp1252.
+- A file the recognizer has read stays locked briefly, so each capture needs its own filename.
+- Small, dim text (the first row of the *Damage Done* panel) is skipped at native size and reads correctly from a 4x enlarged crop.
+- Screens seen: main menu (class list, Zone, Collection, Talents, Achievements), co-op lobby (*Lobby code*, *Party*, *Open slot*, *A co-op run needs at least two players*), the level-up popup (*Level Up!*, three or four cards, per-card Banish, Skip and Reroll buttons, card hotkeys 1-4 and R), and an in-run *Damage Done* / *Party DPS* panel at the bottom right. The popup takes about 2 seconds to close after a pick.
+- Automatic level-up card picking, built on these findings, was removed in 1.2.0 at the maintainer's request.
+
+## Windows exe notes
+
+The exe is a PyInstaller one-file launcher that bundles Python and the libraries and runs `game.py` from its own folder. A child process started from a bundled exe reuses the parent's temporary folder unless `PYINSTALLER_RESET_ENVIRONMENT=1` is set; without it the background watcher died as soon as the starting process exited. Tests that spawn `python -c` skip themselves inside the exe. Startup takes about 6 seconds.
+
+## Game facts (from the game's public guides)
+
+Free fan-made survivors-like by a developer called Aethus, based on a World of Warcraft 1.12.1 reimplementation; nine classes (Warrior, Paladin, Hunter, Rogue, Priest, Shaman, Mage, Warlock, Druid). Windows saves are under `%APPDATA%\Roaming\wenilla-rogue`. Co-op for up to five players exists in newer versions. The guides give no per-class spell or build advice.
