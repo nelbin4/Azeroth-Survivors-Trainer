@@ -56,13 +56,16 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 
 In the window you can switch **Observe only / Write**, **Start / Stop**, include or exclude each stat, and toggle the card picker. Closing the window leaves the watcher running; press **Stop** to end it.
 
-### Level-up card priorities
+### Level-up card priorities (per class)
 
-Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
+Priorities live in [`card_priorities.json`](card_priorities.json), one list per class. Edit it freely; the trainer reads it for every popup.
 
-- **New spell cards:** Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield (a Paladin list).
-- **Upgrade cards:** area of effect, then cooldown, then luck, then everything else.
+- **`spells`** — new-spell cards, best first. Ships with a Paladin list (Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield) and a **Hunter starting list** (Volley, Multi-Shot, Explosive Trap, Immolation Trap, Arcane Shot, Serpent Sting, Aimed Shot, Rapid Fire, Concussive Shot, Wing Clip). The Hunter order is a starting guess, not taken from a guide — adjust it to your playstyle.
+- **`upgrades`** — keywords for upgrade cards ("Improves a spell you know"), best first: area, cooldown, luck by default. A larger percentage wins a tie.
+- **`known`** — extra spell names used only to recognise the class.
+- **Class choice:** `auto` recognises the class from the spell names on the popup. Or pick one in the window's **Card class** box.
 - If nothing on the list is offered, it takes the rarest card (legendary, then epic, then rare). It never rerolls and never skips.
+- Other classes: add a block to the JSON (copy the Hunter one). A class without a list falls back to the rarest card for spell popups and the shared upgrade keywords.
 
 ## How it stays safe
 
@@ -94,7 +97,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## Development
 
 ```bash
-python game.py self-test    # 41 tests, no game required
+python game.py self-test    # 44 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.

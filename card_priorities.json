@@ -1,0 +1,65 @@
+{
+  "_comment": "Card priorities per class. 'spells' = new-spell cards, best first. 'known' = spell names used to recognise the class from the popup. 'upgrades' = keywords for upgrade cards, best first. Edit freely.",
+  "upgrades": [
+    "area",
+    "cooldown",
+    "luck"
+  ],
+  "classes": {
+    "Paladin": {
+      "spells": [
+        "consecration",
+        "redemption",
+        "holy wrath",
+        "holy shock",
+        "hammer of justice",
+        "divine shield"
+      ],
+      "known": [
+        "holy light",
+        "judgement",
+        "hammer of wrath",
+        "exorcism",
+        "seal of righteousness",
+        "seal of command",
+        "blessing of might",
+        "blessing of kings",
+        "flash of light"
+      ]
+    },
+    "Hunter": {
+      "spells": [
+        "volley",
+        "multi shot",
+        "explosive trap",
+        "immolation trap",
+        "arcane shot",
+        "serpent sting",
+        "aimed shot",
+        "rapid fire",
+        "concussive shot",
+        "wing clip"
+      ],
+      "known": [
+        "auto shot",
+        "raptor strike",
+        "mongoose bite",
+        "hunters mark",
+        "scatter shot",
+        "freezing trap",
+        "frost trap",
+        "viper sting",
+        "scorpid sting",
+        "wyvern sting",
+        "mend pet",
+        "bestial wrath",
+        "distracting shot",
+        "disengage",
+        "counterattack",
+        "trueshot aura",
+        "aspect of the hawk",
+        "aspect of the monkey"
+      ]
+    }
+  }
+}

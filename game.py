@@ -2140,27 +2140,55 @@ def parse_cards(lines,width,height):
 
 def fuzzy_in(text,name):
     import difflib
+    text=text.lower().replace('-',' ').replace("'",'');name=name.lower().replace('-',' ').replace("'",'')
     if name in text:return True
     words=text.split();size=len(name.split())
     return any(difflib.SequenceMatcher(None,' '.join(words[i:i+size]),name).ratio()>=.82 for i in range(max(1,len(words)-size+1)))
 
-def choose_card(texts):
+def load_card_config():
+    """Per-class card priorities from card_priorities.json; falls back to the built-in Paladin defaults."""
+    try:
+        data=json.loads((ROOT/'card_priorities.json').read_text(encoding='utf-8'))
+        if isinstance(data.get('classes'),dict):return data
+    except (OSError,ValueError):pass
+    return dict(upgrades=list(CARD_UPGRADES),classes=dict(Paladin=dict(spells=list(CARD_SPELLS),known=[])))
+
+def detect_card_class(texts,config):
+    """Which class is this? The class whose spell names appear on the most cards."""
+    best=None
+    for name,spec in config.get('classes',{}).items():
+        vocabulary=list(spec.get('spells',[]))+list(spec.get('known',[]))
+        hits=sum(any(fuzzy_in(t,v) for v in vocabulary) for t in texts)
+        if hits and (best is None or hits>best[0]):best=(hits,name)
+    return best[1] if best else None
+
+def choose_card(texts,spells=CARD_SPELLS,upgrades=CARD_UPGRADES):
     """Returns dict(index, mode, rank) or None when no card is on the priority lists."""
     import re
     texts=[t.lower() for t in texts]
     if any('new spell' in t for t in texts):
-        ranked=[(next((r for r,name in enumerate(CARD_SPELLS) if fuzzy_in(t,name)),None),i) for i,t in enumerate(texts)]
+        ranked=[(next((r for r,name in enumerate(spells) if fuzzy_in(t,name)),None),i) for i,t in enumerate(texts)]
         ranked=[(r,i) for r,i in ranked if r is not None]
         if not ranked:return None
-        r,i=min(ranked);return dict(index=i,mode='spell',rank=CARD_SPELLS[r])
+        r,i=min(ranked);return dict(index=i,mode='spell',rank=spells[r])
     best=None
     for i,t in enumerate(texts):
-        hits=[(CARD_UPGRADES.index(m.group(2)),-abs(int(m.group(1)))) for m in re.finditer(r'([+-]?\d+)\s*%\s*(?:more\s*)?(area|cooldown|luck)',t)]
-        if not hits:hits=[(CARD_UPGRADES.index(k),0) for k in CARD_UPGRADES if re.search(r'\b'+k,t)]
+        hits=[(upgrades.index(m.group(2)),-abs(int(m.group(1)))) for m in re.finditer(r'([+-]?\d+)\s*%\s*(?:more\s*)?('+'|'.join(re.escape(k) for k in upgrades)+')',t)]
+        if not hits:hits=[(upgrades.index(k),0) for k in upgrades if re.search(r'\b'+re.escape(k),t)]
         if hits:
             key=(min(hits),i)
             if best is None or key<best:best=key
-    return None if best is None else dict(index=best[1],mode='upgrade',rank=CARD_UPGRADES[best[0][0]])
+    return None if best is None else dict(index=best[1],mode='upgrade',rank=upgrades[best[0][0]])
+
+_CLASS=[None]
+
+def choose_for_class(texts,config,setting='auto'):
+    """Choice using the priorities of the selected class, or of the class recognised from the popup."""
+    cls=setting if setting not in (None,'','auto') else (detect_card_class(texts,config) or _CLASS[0])
+    if cls in config.get('classes',{}):_CLASS[0]=cls
+    spec=config.get('classes',{}).get(cls,{})
+    choice=choose_card(texts,spec.get('spells',[]),spec.get('upgrades') or config.get('upgrades') or list(CARD_UPGRADES))
+    return cls,choice
 
 def fallback_card(texts):
     """Nothing on the priority lists: take the rarest card offered (never skip, never reroll); ties go to the first."""
@@ -2208,7 +2236,7 @@ def pick_cards(pid,note,wait=4.):
         seen=time.monotonic()
         info,width,height=look(handle,.45,.9)
         if len(info['columns'])<2:continue  # cards still animating in
-        texts=[c['text'] for c in info['columns']];choice=choose_card(texts)
+        texts=[c['text'] for c in info['columns']];cls,choice=choose_for_class(texts,load_card_config(),read().get('card_class','auto'))
         if choice is None:choice=dict(index=fallback_card(texts),mode='fallback',rank='rarest card')
         index=choice['index'];press_key(handle,0x31+index);how='key';reaction=time.monotonic()-seen
         closed=False
@@ -2218,7 +2246,7 @@ def pick_cards(pid,note,wait=4.):
                 if not popup_open(handle):closed=True;break
             if closed:break
             if attempt==0:click_window(handle,info['columns'][index]['x'],height*.6);how='click'
-        note(f"Level-up cards: chose #{index+1} ({choice['mode']}: {choice['rank']}) by {how}, {reaction:.2f}s after the popup was seen"+('.' if closed else '; popup still open.'))
+        note(f"Level-up cards: chose #{index+1} ({cls or 'class unknown'} {choice['mode']}: {choice['rank']}) by {how}, {reaction:.2f}s after the popup was seen"+('.' if closed else '; popup still open.'))
         if not closed:break
         picks+=1;end_wait=time.monotonic()+.8  # another popup may follow a multi-level gain
     note(f'Level-up cards: done ({picks} pick(s)).')
@@ -2254,7 +2282,7 @@ def cards_test():
     if not handle:raise RuntimeError('Game window not found.')
     info,_,_=look(handle)
     print(json.dumps(dict(popup_active=info['active'],cards=[c['text'][:90] for c in info['columns']],
-        decision=choose_card([c['text'] for c in info['columns']]) if info['active'] else None,keys_sent=False),indent=2))
+        decision=(lambda r:dict(class_=r[0],choice=r[1]))(choose_for_class([c['text'] for c in info['columns']],load_card_config(),read().get('card_class','auto'))) if info['active'] else None,keys_sent=False),indent=2))
 
 def configure(game_exe,name):
     """Create or update session.json for this machine: game path and character name."""
@@ -2322,6 +2350,11 @@ class WatcherWindow:
         ttk.Radiobutton(ctl,text='Write',variable=self.mode,value='write').pack(side='left',padx=6)
         self.cards=tk.BooleanVar(value=read().get('cards_enabled',True))
         ttk.Checkbutton(root,text='Auto-pick level-up cards (priority list)',variable=self.cards,command=lambda:update_session(lambda d:d.update(cards_enabled=bool(self.cards.get())))).pack(anchor='w',padx=12)
+        row=ttk.Frame(root);row.pack(anchor='w',padx=12)
+        ttk.Label(row,text='Card class').pack(side='left')
+        self.card_class=tk.StringVar(value=read().get('card_class','auto'))
+        box=ttk.Combobox(row,textvariable=self.card_class,values=['auto']+sorted(load_card_config().get('classes',{})),width=12,state='readonly');box.pack(side='left',padx=6)
+        box.bind('<<ComboboxSelected>>',lambda e:update_session(lambda d:d.update(card_class=self.card_class.get())))
         ttk.Label(root,text='Stats on the character (tick = included)').pack(anchor='w',padx=12)
         table=ttk.Frame(root);table.pack(fill='both',expand=True,padx=12,pady=4)
         canvas=tk.Canvas(table,highlightthickness=0,height=250);bar=ttk.Scrollbar(table,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
@@ -2578,6 +2611,23 @@ def self_test():
         def test_pick_cards_never_presses_reroll(self):
             import inspect
             self.assertNotIn('0x52',inspect.getsource(pick_cards))
+        def test_hunter_priorities_and_class_detection(self):
+            config=load_card_config()
+            texts=['legendary multi shot new spell fires','epic explosive trap new spell lays','rare auto shot new spell']
+            self.assertEqual(detect_card_class(texts,config),'Hunter')
+            cls,choice=choose_for_class(texts,config)
+            self.assertEqual((cls,choice['index'],choice['rank']),('Hunter',1 if False else 0,'multi shot'))
+            cls,choice=choose_for_class(['epic explosive trap new spell','rare multi-shot new spell'],config,'Hunter')
+            self.assertEqual(choice['rank'],'multi shot')
+        def test_paladin_cards_are_not_chosen_by_hunter_lists(self):
+            config=load_card_config()
+            texts=['legendary consecration new spell','epic multi shot new spell']
+            self.assertEqual(choose_for_class(texts,config,'Paladin')[1]['rank'],'consecration')
+            self.assertEqual(choose_for_class(texts,config,'Hunter')[1]['rank'],'multi shot')
+        def test_upgrade_keywords_come_from_the_config_and_percent_beats_count(self):
+            self.assertEqual(choose_card(['+2 targets','+20% area','+9% damage'])['index'],1)
+            self.assertEqual(choose_card(['+10% damage','+40% damage'],upgrades=['damage'])['index'],1)
+            self.assertIsNone(choose_card(['+10% healing'],upgrades=['damage']))
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
