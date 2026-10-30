@@ -9,6 +9,7 @@ A Windows trainer for **Azeroth Survivors**. It finds your character in the game
 
 ## What it does
 
+- **Automatic character detection.** Finds your character in memory by structure, not by a fixed name. In a solo run it is the only character; when hosting with others it picks the one listed first in your player frame (read from a background capture). Names it has seen are remembered.
 - **Stat trainer.** Keeps max/current HP, damage, crit, crit damage, speed, XP, regeneration, luck, gold and more at your targets. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups.
 - **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only.
 - **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
@@ -35,7 +36,7 @@ pip install -r requirements.txt
 python game.py
 ```
 
-The window asks for two things once: the path to `AzerothSurvivors.exe` and your character name exactly as shown in game. (Or use `python game.py setup --game "C:\path\to\AzerothSurvivors.exe" --name YourCharacter`.) Your settings are stored in `session.json` next to the program and are never uploaded.
+The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. (Command line: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`, with `--name YourCharacter` if you want to pin one.) Your settings are stored in `session.json` next to the program and are never uploaded.
 
 ## Using it
 
@@ -64,7 +65,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## How it stays safe
 
 1. Finds the game by exact executable path and checks its SHA-256. An unknown build triggers read-only learning, never blind writes.
-2. Identifies your character by its length-checked name, then validates player ID, level, plausible stats and the modifier table.
+2. Identifies your character by its length-checked name (configured or auto-detected), then validates player ID, level, plausible stats and the modifier table.
 3. Backs up original bytes before the first write, checks ownership before each write, and verifies by readback. On failure it conditionally restores only bytes it wrote.
 4. A single odd reading never resets state; a level drop must be seen twice before the run is treated as new, and writes pause meanwhile.
 5. If the character is ambiguous (several valid copies), it picks the one that actually changes, or refuses to write.
@@ -80,7 +81,8 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## Troubleshooting
 
 - **"Not configured yet"** — run the window once, or `setup`.
-- **State stays "seeking record"** — you are probably in a lobby or in someone else's game (not supported), or the name does not match exactly.
+- **State stays "seeking record"** — you are probably in a lobby or in someone else's game (not supported). If you pinned a name, make sure it matches exactly, or clear it by running `setup` again without `--name`.
+- **State "blocked ambiguous" with several names** — more than one character is in the game and yours could not be told apart; pin your name with `setup --name`.
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
 - Errors from the window are written to `gui-error.log`.
@@ -88,7 +90,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## Development
 
 ```bash
-python game.py self-test    # 32 tests, no game required
+python game.py self-test    # 34 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.
