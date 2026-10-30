@@ -575,9 +575,9 @@ def auto_command():
                             finally:picking[0]=False
                         threading.Thread(target=card_job,daemon=True).start()
                     card_level[0]=level_now
-                    if not args.trace_only and time.monotonic()>=meter_next[0] and backend.name and read().get('meter_enabled',True):
+                    if not args.trace_only and time.monotonic()>=meter_next[0] and read().get('meter_enabled',True):
                         meter_next[0]=time.monotonic()+20
-                        threading.Thread(target=lambda pid=engine.generation[0],name=backend.name:sample_meter(pid,name),daemon=True).start()
+                        threading.Thread(target=lambda pid=engine.generation[0]:sample_meter(pid),daemon=True).start()
                 if state.get('state')!=last_state:
                     print(json.dumps(state),flush=True);last_state=state.get('state')
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
@@ -2033,7 +2033,7 @@ def shot_path(tag):
     _SHOTS[0]+=1
     return Path(tempfile.gettempdir())/f'azeroth_{tag}_{os.getpid()}_{_SHOTS[0]}.bmp'
 
-def capture_window(handle,path,top=0.,bottom=1.):
+def capture_window(handle,path,top=0.,bottom=1.,left=0.,right=1.):
     """Background capture (PrintWindow): no focus change, no cursor movement, nothing visible to the player.
     top/bottom crop the saved image (fractions of the height); returns the full client size."""
     import numpy as np
@@ -2048,7 +2048,7 @@ def capture_window(handle,path,top=0.,bottom=1.):
         class Info(ctypes.Structure):_fields_=[('s',wt.DWORD),('w',wt.LONG),('h',wt.LONG),('p',wt.WORD),('b',wt.WORD),('c',wt.DWORD),('si',wt.DWORD),('x',wt.LONG),('y',wt.LONG),('u',wt.DWORD),('i',wt.DWORD)]
         info=Info(ctypes.sizeof(Info),width,-height,1,32,0,0,0,0,0,0);buffer=ctypes.create_string_buffer(width*height*4)
         gdi.GetDIBits(mem,bitmap,0,height,buffer,ctypes.byref(info),0)
-        pixels=np.frombuffer(buffer,dtype=np.uint8).reshape(height,width,4)[int(top*height):int(bottom*height),:,[2,1,0]]
+        pixels=np.frombuffer(buffer,dtype=np.uint8).reshape(height,width,4)[int(top*height):int(bottom*height),int(left*width):int(right*width),[2,1,0]]
         Image.fromarray(np.ascontiguousarray(pixels)).save(path,'BMP')
     finally:
         gdi.DeleteObject(bitmap);gdi.DeleteDC(mem);user.ReleaseDC(handle,hdc)
@@ -2196,36 +2196,71 @@ def choose_for_class(texts,config,setting='auto'):
     choice=choose_card(texts,spec.get('spells',[]),spec.get('upgrades') or config.get('upgrades') or list(CARD_UPGRADES))
     return cls,choice
 
-_METER=dict(top=None,row=None,time=0.)
+_METER=dict(ranking=[],time=0.)
 
-def parse_meter(lines,width,height,name):
-    """Find the Party DPS panel and our own row. Returns dict(top_spell, row) or None."""
+def clean_row_name(text,vocabulary=()):
+    """'4 1. voile' -> 'volley': keep the words after the last dot, then snap to a known spell name if close."""
+    import difflib,re
+    name=re.sub(r'[^A-Za-z\' -]','',text.split('.')[-1]).strip()
+    if vocabulary:
+        close=difflib.get_close_matches(name.lower(),[v.lower() for v in vocabulary],n=1,cutoff=.6)
+        if close:return close[0]
+    return name
+
+def parse_damage_rows(lines,width,height):
+    """From OCR lines (full-window coordinates) of the Damage Done panel: (named rows, unnamed number rows)."""
     import re
-    if not name:return None
-    header=next((l for l in lines if 'party dps' in l[4].lower()),None)
+    header=next((l for l in lines if re.search(r'damage\s*done',l[4],re.I)),None)
     if header is None:return None
-    x0,y0=header[0],header[1]
-    rows=sorted((l for l in lines if y0<l[1]<y0+height*.25 and abs(l[0]-x0)<width*.12),key=lambda l:l[1])
-    for _,_,_,_,text in rows:
-        position=text.lower().find(name.lower())
-        if position<0:
-            if not fuzzy_in(text,name):continue
-            position=0
-        after=re.sub(r'^[^A-Za-z]+','',text[position+len(name):])
-        spell=re.sub(r'\s*[\d(].*$','',after).strip(" .-_|")
-        if len(spell)>=3:return dict(top_spell=spell,row=text)
-    return None
+    left=header[0];named=[];numbers=[]
+    for x1,y1,x2,y2,text in sorted(lines,key=lambda l:l[1]):
+        if y1<=header[1]+4 or y1>header[1]+height*.2:continue
+        match=re.match(r'^\s*(\d+)\s*[._,]?\s*(.+)$',text)
+        if abs(x1-left)<=width*.04 and match and len(match.group(2))>=3:named.append((int(match.group(1)),match.group(2).strip(),y1))
+        elif x1>left+width*.05 and re.search(r'\d',text):numbers.append((y1,text))
+    return dict(header=header,named=named,numbers=numbers)
 
-def sample_meter(pid,name):
-    """One background look at the damage meter; remembers our best spell for the card picker."""
+def read_damage_done(handle,vocabulary=()):
+    """Our spells (and item procs) ranked by damage, from the Damage Done panel at the bottom right.
+    Row 1 is small and dim, so it is re-read from an enlarged crop."""
+    from PIL import Image,ImageOps
+    path=shot_path('dmg');width,height=capture_window(handle,path,.5,1.,.6,1.)
+    x_off,y_off=int(.6*width),int(.5*height)
+    image=Image.open(path).convert('RGB');image.load()
+    lines=[(x1+x_off,y1+y_off,x2+x_off,y2+y_off,t) for x1,y1,x2,y2,t in ocr_lines(path)]
+    panel=parse_damage_rows(lines,width,height)
+    if panel is None:return None
+    ranking={rank:clean_row_name(name,vocabulary) for rank,name,_ in panel['named']}
+    if 1 not in ranking and panel['named'] and panel['numbers']:
+        first_y=min(y for _,_,y in panel['named'])
+        above=[y for y,_ in panel['numbers'] if y<first_y-5]
+        if above:
+            y=min(above)-y_off;x=panel['header'][0]-x_off
+            for pad in (0,6):
+                box=(max(0,x-6-pad),max(0,y-9),x+int(width*.085)+pad,y+19)
+                crop=image.crop(box);crop=crop.resize((crop.width*4,crop.height*4),Image.LANCZOS)
+                for variant in (crop,ImageOps.autocontrast(ImageOps.grayscale(crop)).convert('RGB')):
+                    temporary=shot_path('row1');variant.save(temporary,'BMP')
+                    text=' '.join(t for *_,t in ocr_lines(temporary));name=clean_row_name(text,vocabulary)
+                    if len(name)>=4:ranking[1]=name;break
+                if 1 in ranking:break
+    ordered=[ranking[r] for r in sorted(ranking)]
+    return dict(ranking=ordered) if ordered else None
+
+def meter_vocabulary():
+    config=load_card_config()
+    return [v for spec in config.get('classes',{}).values() for v in list(spec.get('spells',[]))+list(spec.get('known',[]))]
+
+def sample_meter(pid,name=None):
+    """One background look at the damage meter; remembers our spell ranking for the card picker."""
     handle=game_window(pid)
-    if not handle or not name:return None
-    path=shot_path('meter');width,height=capture_window(handle,path,0.,.6);found=parse_meter(ocr_lines(path),width,height,name)
-    if found:_METER.update(top=found['top_spell'],row=found['row'],time=time.monotonic())
+    if not handle:return None
+    found=read_damage_done(handle,meter_vocabulary())
+    if found:_METER.update(ranking=found['ranking'],time=time.monotonic())
     return found
 
-def meter_top(max_age=180.):
-    return _METER['top'] if _METER['top'] and time.monotonic()-_METER['time']<=max_age else None
+def meter_ranking(max_age=180.):
+    return list(_METER['ranking']) if _METER['ranking'] and time.monotonic()-_METER['time']<=max_age else []
 
 def card_spell(text):
     """The spell an upgrade card improves: the words before 'Rank n » m'."""
@@ -2233,14 +2268,15 @@ def card_spell(text):
     head=re.split(r'\brank\b',text,flags=re.I)[0]
     return re.sub(r'^(?:spells\s+)?(?:[+\-\d%\s]*)','',head.strip(),flags=re.I).strip()
 
-def choose_for_top_spell(texts,top,upgrades):
-    """Upgrade popups: prefer cards improving our best-performing spell, then the keyword priority among them."""
-    if not top or any('new spell' in t.lower() for t in texts):return None
-    mine=[i for i,t in enumerate(texts) if fuzzy_in(t,top)]
-    if not mine:return None
-    pick=choose_card([texts[i] for i in mine],upgrades=upgrades)
-    index=mine[pick['index']] if pick else mine[0]
-    return dict(index=index,mode='upgrade',rank=(pick['rank'] if pick else 'best spell')+' on '+top)
+def choose_for_ranking(texts,ranking,upgrades):
+    """Upgrade popups: take a card for our highest-ranked spell that is offered, then the keyword priority among its cards."""
+    if not ranking or any('new spell' in t.lower() for t in texts):return None
+    for position,name in enumerate(ranking,1):
+        mine=[i for i,t in enumerate(texts) if fuzzy_in(t,name)]
+        if mine:
+            pick=choose_card([texts[i] for i in mine],upgrades=upgrades)
+            return dict(index=mine[pick['index']] if pick else mine[0],mode='upgrade',rank=(pick['rank'] if pick else 'upgrade')+f' on {name} (#{position})')
+    return None
 
 def fallback_card(texts):
     """Nothing on the priority lists: take the rarest card offered (never skip, never reroll); ties go to the first."""
@@ -2291,7 +2327,7 @@ def pick_cards(pid,note,wait=4.):
         texts=[c['text'] for c in info['columns']];cls,choice=choose_for_class(texts,load_card_config(),read().get('card_class','auto'))
         spec=load_card_config().get('classes',{}).get(cls,{})
         if read().get('meter_enabled',True):
-            smart=choose_for_top_spell(texts,meter_top(),spec.get('upgrades') or load_card_config().get('upgrades') or list(CARD_UPGRADES))
+            smart=choose_for_ranking(texts,meter_ranking(),spec.get('upgrades') or load_card_config().get('upgrades') or list(CARD_UPGRADES))
             if smart:choice=smart
         if choice is None:choice=dict(index=fallback_card(texts),mode='fallback',rank='rarest card')
         index=choice['index'];press_key(handle,0x31+index);how='key';reaction=time.monotonic()-seen
@@ -2331,17 +2367,13 @@ def detect_scene(lines,width,height):
     return 'unknown'
 
 def meter_test():
-    """Read-only: show what the damage meter says about our character right now."""
+    """Read-only: show our spell ranking as the Damage Done panel lists it right now."""
     data=read();matches=[p for p in psutil.process_iter(['exe']) if p.info['exe'] and os.path.normcase(p.info['exe'])==os.path.normcase(data['game_exe'])]
     if len(matches)!=1:raise RuntimeError('Game process not found.')
-    name=data.get('auto_monitor',{}).get('character') or sys.argv[2] if len(sys.argv)>2 else data.get('auto_monitor',{}).get('character')
     handle=game_window(matches[0].pid)
     if not handle:raise RuntimeError('Game window not found.')
-    path=shot_path('meter');width,height=capture_window(handle,path,0.,.6);lines=ocr_lines(path)
-    panel=[l[4] for l in lines if 'party dps' in l[4].lower()]
-    header=next((l for l in lines if 'party dps' in l[4].lower()),None)
-    rows=[] if header is None else [l[4] for l in sorted((l for l in lines if header[1]<l[1]<header[1]+height*.25 and abs(l[0]-header[0])<width*.12),key=lambda l:l[1])]
-    print(json.dumps(dict(character=name,meter_visible=bool(panel),rows=rows,parsed=parse_meter(lines,width,height,name),keys_sent=False),indent=2))
+    found=read_damage_done(handle,meter_vocabulary())
+    print(json.dumps(dict(meter_visible=found is not None,ranking=found['ranking'] if found else [],keys_sent=False),indent=2))
 
 def cards_test():
     """Dry run: capture the game window, read the popup and say what would be chosen. Presses nothing."""
@@ -2702,20 +2734,26 @@ def self_test():
             self.assertEqual(choose_card(['+2 targets','+20% area','+9% damage'])['index'],1)
             self.assertEqual(choose_card(['+10% damage','+40% damage'],upgrades=['damage'])['index'],1)
             self.assertIsNone(choose_card(['+10% healing'],upgrades=['damage']))
-        def test_meter_row_gives_our_best_spell(self):
-            lines=[(1900,500,2100,530,'Party DPS'),(1900,560,2200,590,'1. Nelbin \u00b7 Volley 1691k dps'),(1900,600,2200,630,'2. Doomed \u00b7 Aimed Shot 900k'),(1900,640,2200,670,'3. Tordunn \u00b7 Whirlwind')]
-            self.assertEqual(parse_meter(lines,2305,1360,'Nelbin')['top_spell'],'Volley')
-            self.assertEqual(parse_meter(lines,2305,1360,'Doomed')['top_spell'],'Aimed Shot')
-            self.assertIsNone(parse_meter(lines,2305,1360,'Nobody'))
-            self.assertIsNone(parse_meter(lines[1:],2305,1360,'Nelbin'))
-            self.assertIsNone(parse_meter(lines,2305,1360,None))
-        def test_upgrade_cards_for_the_best_spell_win(self):
-            texts=['Explosive Trap Rank 8 » 9 +23% area','Volley Rank 5 » 6 -9% cooldown','Auto Shot Rank 10 » 11 +40% area']
-            self.assertEqual(choose_for_top_spell(texts,'Volley',['area','cooldown','luck'])['index'],1)
-            self.assertIsNone(choose_for_top_spell(texts,'Immolation Trap',['area','cooldown','luck']))
-            self.assertIsNone(choose_for_top_spell(['new spell volley'],'Volley',['area']))
+        def test_damage_done_rows_are_parsed(self):
+            lines=[(1931,1184,2017,1196,'Damage Done'),(2176,1208,2296,1218,'18886m (426.5k.93%)'),(1950,1228,2043,1239,'2. Explosive Trap'),(2206,1228,2275,1238,'731m (16.5k.'),
+                   (1950,1247,2030,1256,'3. Aimed Shot'),(2212,1248,2275,1258,'1.53m'),(1949,1268,2031,1279,'4. Cryptstalker'),(1000,1228,1100,1240,'5. Elsewhere on screen')]
+            panel=parse_damage_rows(lines,2305,1360)
+            self.assertEqual([(r,n) for r,n,_ in panel['named']],[(2,'Explosive Trap'),(3,'Aimed Shot'),(4,'Cryptstalker')])
+            self.assertEqual(min(y for y,_ in panel['numbers']),1208)
+            self.assertIsNone(parse_damage_rows(lines[1:],2305,1360))
+        def test_row_names_are_cleaned_and_snapped_to_known_spells(self):
+            self.assertEqual(clean_row_name('4 1. voile',['Volley','Aimed Shot']),'volley')
+            self.assertEqual(clean_row_name('t. Aimed Shot'),'Aimed Shot')
+            self.assertEqual(clean_row_name('Cryptstalker',['Volley']),'Cryptstalker')
+        def test_cards_follow_the_damage_ranking(self):
+            texts=['Explosive Trap Rank 8 » 9 +23% area','Aimed Shot Rank 5 » 6 -9% cooldown','Auto Shot Rank 10 » 11 +40% area']
+            self.assertEqual(choose_for_ranking(texts,['volley','explosive trap','aimed shot'],['area','cooldown','luck'])['index'],0)
+            self.assertEqual(choose_for_ranking(texts,['volley','aimed shot','explosive trap'],['area','cooldown','luck'])['index'],1)
+            self.assertIsNone(choose_for_ranking(texts,['volley'],['area']))
+            self.assertIsNone(choose_for_ranking(['new spell volley'],['volley'],['area']))
+            self.assertIsNone(choose_for_ranking(texts,[],['area']))
             two=['Volley Rank 5 » 6 -9% cooldown','Volley Rank 6 » 7 +12% area']
-            self.assertEqual(choose_for_top_spell(two,'Volley',['area','cooldown','luck'])['index'],1)
+            self.assertEqual(choose_for_ranking(two,['volley'],['area','cooldown','luck'])['index'],1)
         def test_card_spell_is_read_from_the_card_text(self):
             self.assertEqual(card_spell('SPELLS Explosive Trap Rank 8 » 9 +23% area'),'Explosive Trap')
             self.assertEqual(card_spell('Volley Rank 5 » 6'),'Volley')
