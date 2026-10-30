@@ -2205,19 +2205,20 @@ def pick_cards(pid,note,wait=4.):
         if not popup_open(handle):
             if time.monotonic()>end_wait:break
             continue  # the recognizer itself paces this loop; no fixed sleeps
+        seen=time.monotonic()
         info,width,height=look(handle,.45,.9)
         if len(info['columns'])<2:continue  # cards still animating in
         texts=[c['text'] for c in info['columns']];choice=choose_card(texts)
         if choice is None:choice=dict(index=fallback_card(texts),mode='fallback',rank='rarest card')
-        index=choice['index'];press_key(handle,0x31+index);how='key'
+        index=choice['index'];press_key(handle,0x31+index);how='key';reaction=time.monotonic()-seen
         closed=False
         for attempt in range(2):
-            deadline=time.monotonic()+1.6
+            deadline=time.monotonic()+3.5  # the game's own close animation takes about 2 s
             while time.monotonic()<deadline:
                 if not popup_open(handle):closed=True;break
             if closed:break
             if attempt==0:click_window(handle,info['columns'][index]['x'],height*.6);how='click'
-        note(f"Level-up cards: chose #{index+1} ({choice['mode']}: {choice['rank']}) by {how}"+('.' if closed else '; popup still open.'))
+        note(f"Level-up cards: chose #{index+1} ({choice['mode']}: {choice['rank']}) by {how}, {reaction:.2f}s after the popup was seen"+('.' if closed else '; popup still open.'))
         if not closed:break
         picks+=1;end_wait=time.monotonic()+.8  # another popup may follow a multi-level gain
     note(f'Level-up cards: done ({picks} pick(s)).')
