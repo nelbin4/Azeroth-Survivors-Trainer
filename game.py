@@ -551,6 +551,7 @@ def auto_command():
         update_session(lambda current:current.update(auto_monitor=runtime))
         deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;last_identity=None;card_level=[None];picking=[False]
         if not args.trace_only:threading.Thread(target=lambda:ocr_server(),daemon=True).start()
+        meter_next=[0.]
         def card_note(text):
             def add(current):
                 log=current.setdefault('card_log',[]);log.append(dict(time=time.time(),text=text));current['card_log']=log[-30:]
@@ -572,6 +573,9 @@ def auto_command():
                             finally:picking[0]=False
                         threading.Thread(target=card_job,daemon=True).start()
                     card_level[0]=level_now
+                    if not args.trace_only and time.monotonic()>=meter_next[0] and backend.name and read().get('meter_enabled',True):
+                        meter_next[0]=time.monotonic()+20
+                        threading.Thread(target=lambda pid=engine.generation[0],name=backend.name:sample_meter(pid,name),daemon=True).start()
                 if state.get('state')!=last_state:
                     print(json.dumps(state),flush=True);last_state=state.get('state')
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
@@ -2190,6 +2194,52 @@ def choose_for_class(texts,config,setting='auto'):
     choice=choose_card(texts,spec.get('spells',[]),spec.get('upgrades') or config.get('upgrades') or list(CARD_UPGRADES))
     return cls,choice
 
+_METER=dict(top=None,row=None,time=0.)
+
+def parse_meter(lines,width,height,name):
+    """Find the Party DPS panel and our own row. Returns dict(top_spell, row) or None."""
+    import re
+    if not name:return None
+    header=next((l for l in lines if 'party dps' in l[4].lower()),None)
+    if header is None:return None
+    x0,y0=header[0],header[1]
+    rows=sorted((l for l in lines if y0<l[1]<y0+height*.25 and abs(l[0]-x0)<width*.12),key=lambda l:l[1])
+    for _,_,_,_,text in rows:
+        position=text.lower().find(name.lower())
+        if position<0:
+            if not fuzzy_in(text,name):continue
+            position=0
+        after=re.sub(r'^[^A-Za-z]+','',text[position+len(name):])
+        spell=re.sub(r'\s*[\d(].*$','',after).strip(" .-_|")
+        if len(spell)>=3:return dict(top_spell=spell,row=text)
+    return None
+
+def sample_meter(pid,name):
+    """One background look at the damage meter; remembers our best spell for the card picker."""
+    handle=game_window(pid)
+    if not handle or not name:return None
+    path=shot_path('meter');width,height=capture_window(handle,path,0.,.6);found=parse_meter(ocr_lines(path),width,height,name)
+    if found:_METER.update(top=found['top_spell'],row=found['row'],time=time.monotonic())
+    return found
+
+def meter_top(max_age=180.):
+    return _METER['top'] if _METER['top'] and time.monotonic()-_METER['time']<=max_age else None
+
+def card_spell(text):
+    """The spell an upgrade card improves: the words before 'Rank n » m'."""
+    import re
+    head=re.split(r'\brank\b',text,flags=re.I)[0]
+    return re.sub(r'^(?:spells\s+)?(?:[+\-\d%\s]*)','',head.strip(),flags=re.I).strip()
+
+def choose_for_top_spell(texts,top,upgrades):
+    """Upgrade popups: prefer cards improving our best-performing spell, then the keyword priority among them."""
+    if not top or any('new spell' in t.lower() for t in texts):return None
+    mine=[i for i,t in enumerate(texts) if fuzzy_in(t,top)]
+    if not mine:return None
+    pick=choose_card([texts[i] for i in mine],upgrades=upgrades)
+    index=mine[pick['index']] if pick else mine[0]
+    return dict(index=index,mode='upgrade',rank=(pick['rank'] if pick else 'best spell')+' on '+top)
+
 def fallback_card(texts):
     """Nothing on the priority lists: take the rarest card offered (never skip, never reroll); ties go to the first."""
     rarity=('legendary','epic','rare','uncommon')
@@ -2237,6 +2287,10 @@ def pick_cards(pid,note,wait=4.):
         info,width,height=look(handle,.45,.9)
         if len(info['columns'])<2:continue  # cards still animating in
         texts=[c['text'] for c in info['columns']];cls,choice=choose_for_class(texts,load_card_config(),read().get('card_class','auto'))
+        spec=load_card_config().get('classes',{}).get(cls,{})
+        if read().get('meter_enabled',True):
+            smart=choose_for_top_spell(texts,meter_top(),spec.get('upgrades') or load_card_config().get('upgrades') or list(CARD_UPGRADES))
+            if smart:choice=smart
         if choice is None:choice=dict(index=fallback_card(texts),mode='fallback',rank='rarest card')
         index=choice['index'];press_key(handle,0x31+index);how='key';reaction=time.monotonic()-seen
         closed=False
@@ -2273,6 +2327,19 @@ def detect_scene(lines,width,height):
     if re.search(r'\blobby\b|waiting for (?:the )?(?:host|players?)|\binvite (?:code|link)|party members',text):return 'lobby'
     if sum(word in text for word in ('collection','drop tables','codex','talents','achievements','armory','rewards'))>=3:return 'menu'
     return 'unknown'
+
+def meter_test():
+    """Read-only: show what the damage meter says about our character right now."""
+    data=read();matches=[p for p in psutil.process_iter(['exe']) if p.info['exe'] and os.path.normcase(p.info['exe'])==os.path.normcase(data['game_exe'])]
+    if len(matches)!=1:raise RuntimeError('Game process not found.')
+    name=data.get('auto_monitor',{}).get('character') or sys.argv[2] if len(sys.argv)>2 else data.get('auto_monitor',{}).get('character')
+    handle=game_window(matches[0].pid)
+    if not handle:raise RuntimeError('Game window not found.')
+    path=shot_path('meter');width,height=capture_window(handle,path,0.,.6);lines=ocr_lines(path)
+    panel=[l[4] for l in lines if 'party dps' in l[4].lower()]
+    header=next((l for l in lines if 'party dps' in l[4].lower()),None)
+    rows=[] if header is None else [l[4] for l in sorted((l for l in lines if header[1]<l[1]<header[1]+height*.25 and abs(l[0]-header[0])<width*.12),key=lambda l:l[1])]
+    print(json.dumps(dict(character=name,meter_visible=bool(panel),rows=rows,parsed=parse_meter(lines,width,height,name),keys_sent=False),indent=2))
 
 def cards_test():
     """Dry run: capture the game window, read the popup and say what would be chosen. Presses nothing."""
@@ -2350,6 +2417,8 @@ class WatcherWindow:
         ttk.Radiobutton(ctl,text='Write',variable=self.mode,value='write').pack(side='left',padx=6)
         self.cards=tk.BooleanVar(value=read().get('cards_enabled',True))
         ttk.Checkbutton(root,text='Auto-pick level-up cards (priority list)',variable=self.cards,command=lambda:update_session(lambda d:d.update(cards_enabled=bool(self.cards.get())))).pack(anchor='w',padx=12)
+        self.meter=tk.BooleanVar(value=read().get('meter_enabled',True))
+        ttk.Checkbutton(root,text='Prefer upgrades for my best spell (reads the damage meter every 20 s)',variable=self.meter,command=lambda:update_session(lambda d:d.update(meter_enabled=bool(self.meter.get())))).pack(anchor='w',padx=12)
         row=ttk.Frame(root);row.pack(anchor='w',padx=12)
         ttk.Label(row,text='Card class').pack(side='left')
         self.card_class=tk.StringVar(value=read().get('card_class','auto'))
@@ -2631,6 +2700,23 @@ def self_test():
             self.assertEqual(choose_card(['+2 targets','+20% area','+9% damage'])['index'],1)
             self.assertEqual(choose_card(['+10% damage','+40% damage'],upgrades=['damage'])['index'],1)
             self.assertIsNone(choose_card(['+10% healing'],upgrades=['damage']))
+        def test_meter_row_gives_our_best_spell(self):
+            lines=[(1900,500,2100,530,'Party DPS'),(1900,560,2200,590,'1. Nelbin \u00b7 Volley 1691k dps'),(1900,600,2200,630,'2. Doomed \u00b7 Aimed Shot 900k'),(1900,640,2200,670,'3. Tordunn \u00b7 Whirlwind')]
+            self.assertEqual(parse_meter(lines,2305,1360,'Nelbin')['top_spell'],'Volley')
+            self.assertEqual(parse_meter(lines,2305,1360,'Doomed')['top_spell'],'Aimed Shot')
+            self.assertIsNone(parse_meter(lines,2305,1360,'Nobody'))
+            self.assertIsNone(parse_meter(lines[1:],2305,1360,'Nelbin'))
+            self.assertIsNone(parse_meter(lines,2305,1360,None))
+        def test_upgrade_cards_for_the_best_spell_win(self):
+            texts=['Explosive Trap Rank 8 » 9 +23% area','Volley Rank 5 » 6 -9% cooldown','Auto Shot Rank 10 » 11 +40% area']
+            self.assertEqual(choose_for_top_spell(texts,'Volley',['area','cooldown','luck'])['index'],1)
+            self.assertIsNone(choose_for_top_spell(texts,'Immolation Trap',['area','cooldown','luck']))
+            self.assertIsNone(choose_for_top_spell(['new spell volley'],'Volley',['area']))
+            two=['Volley Rank 5 » 6 -9% cooldown','Volley Rank 6 » 7 +12% area']
+            self.assertEqual(choose_for_top_spell(two,'Volley',['area','cooldown','luck'])['index'],1)
+        def test_card_spell_is_read_from_the_card_text(self):
+            self.assertEqual(card_spell('SPELLS Explosive Trap Rank 8 » 9 +23% area'),'Explosive Trap')
+            self.assertEqual(card_spell('Volley Rank 5 » 6'),'Volley')
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
@@ -2875,7 +2961,7 @@ if __name__ == '__main__':
         elif command in ('--help','-h','help'):
             print('setup --game PATH --name NAME (first time) | Preferred: (no arguments) = window | --background = silent watcher | auto | new-game [--apply] | status | stop')
             print('Manual: resolve-name | discover-name --name <character> | named-core --seconds 600 --background')
-            print('Diagnostics: cards-test | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
+            print('Diagnostics: meter-test | cards-test | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
             print('Each argument-based command accepts --help. Legacy start/apply-host were removed (they paused the game).')
         elif command in ('start','_worker','apply-host'):
             raise RuntimeError('Legacy process-pausing commands were removed. Use: auto --background')
@@ -2914,6 +3000,7 @@ if __name__ == '__main__':
                     with mutex('writer',0):named_core()
         elif command == 'self-test': self_test()
         elif command == 'gui':gui()
+        elif command == 'meter-test':meter_test()
         elif command == 'setup':setup_command()
         elif command in ('version','--version'):print(f'{APP_NAME} {VERSION}')
         elif command == 'cards-test':cards_test()

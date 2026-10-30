@@ -64,8 +64,13 @@ Priorities live in [`card_priorities.json`](card_priorities.json), one list per 
 - **`upgrades`** — keywords for upgrade cards ("Improves a spell you know"), best first: area, cooldown, luck by default. A larger percentage wins a tie.
 - **`known`** — extra spell names used only to recognise the class.
 - **Class choice:** `auto` recognises the class from the spell names on the popup. Or pick one in the window's **Card class** box.
+- **Best-spell upgrades (smart pick):** during a run it reads the in-game *Party DPS* panel (every 20 s) to see which of your spells performs best. On upgrade popups it then prefers the card that improves that spell, using the upgrade keywords above to choose among them. New-spell popups still follow the class spell list, since an unowned spell has no damage yet. Switch it off with the window's checkbox (`meter_enabled`).
 - If nothing on the list is offered, it takes the rarest card (legendary, then epic, then rare). It never rerolls and never skips.
 - Other classes: add a block to the JSON (copy the Hunter one). A class without a list falls back to the rarest card for spell popups and the shared upgrade keywords.
+
+## What it looks at on screen
+
+The trainer never records your screen. It reads text from the **game's own window** (a background capture, nothing visible, no cursor or focus change), converts it to text with Windows' built-in recognition on your PC, and deletes the image immediately. Nothing is uploaded. It does this only: every ~10 s while no run is active (to show *in menu* / *in lobby*), after a level-up (to read the cards), and every 20 s during a run if the damage-meter option is on.
 
 ## How it stays safe
 
@@ -97,7 +102,7 @@ Priorities live in [`card_priorities.json`](card_priorities.json), one list per 
 ## Development
 
 ```bash
-python game.py self-test    # 44 tests, no game required
+python game.py self-test    # 47 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.
