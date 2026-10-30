@@ -1,43 +1,70 @@
 # Azeroth Survivors Trainer
 
-A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game, and shows whether you are in a menu, a lobby or a run. It has a small window, a silent background mode, and a command line.
+**Max out your character in Azeroth Survivors.** Open a small window, start your run, and your health, damage, crit, speed, experience, gold and more jump to the values you want, and stay there.
 
-## Install
+> **For solo runs and games you host only.** Don't use it when you join someone else's game: it can't change anything there, and it can cause problems for the other players.
+
+## What you get
+
+- **Huge stats, automatically.** Max health, damage, crit, speed, experience, gold, pickup range, area and more, kept at your targets all run long, even after you level up.
+- **Nothing to configure.** It finds your character by itself, even if you rename it in the lobby.
+- **Doesn't pause the game.** It works quietly in the background while you play.
+- **Easy to switch off.** Untick any stat, switch to *Observe only*, or press *Stop* at any time.
+- **Updates itself** from GitHub when you open it.
+
+## Get started in 3 steps
+
+1. **Download** the latest zip from the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases) and unzip it anywhere. You don't need to install anything else. *(No release listed yet? Use the Python steps in "Install in detail" below.)*
+2. **Open Azeroth Survivors** (the Windows version) and start a **solo run**, or host one.
+3. **Double-click `AzerothSurvivorsTrainer.exe`.** The first time, it asks where the game is (pick `AzerothSurvivors.exe`) and, optionally, your character name: **leave the name blank**. That's it. The window shows what it's doing, and your stats are applied once the run is going.
+
+If the game runs as administrator, run the trainer as administrator too.
+
+## Quick answers
+
+- **Can I use it online?** Only in games *you host*, or solo. Never when joining someone else's game.
+- **Will it break my game?** It's careful (it checks before every change and keeps backups), but changing a game's memory is never risk-free. Use it at your own risk, and don't push stats to extremes you can't undo (for example, very high experience means many level-ups per second).
+- **My antivirus warns about it.** That's common for any trainer that edits another program's memory, because the program is unsigned. The full source is in this repository.
+- **Does it work with the browser version of the game?** No, only the Windows version.
+- **How do I stop it?** Press *Stop* in the window, or just close the game. Closing the window alone leaves it running.
+
+*This is an unofficial fan tool, not affiliated with the game or its developer. No warranty; see [LICENSE](LICENSE).*
+
+---
+
+# Details
+
+Everything below is for people who want to know more or to use the command line.
+
+## Install in detail
 
 ### Option A: the Windows program (no Python needed)
 
-Download the release zip from the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases) (if no release is listed yet, use Option B, or build the exe yourself: see Development), unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. Everything below applies the same way (the first-run prompts, the window, updates). The first start takes a few seconds while the bundled libraries unpack. Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
+Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. The first start takes a few seconds while the bundled libraries unpack. Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
 
 > Windows SmartScreen or your antivirus may warn about an unsigned program that reads another program's memory. That is expected for any trainer; the source of everything is in this repository.
 
 ### Option B: with Python
 
-For either option you need **Windows 10/11 (64-bit)** and the **Windows build of Azeroth Survivors**; Option B also needs **Python 3.12 or newer** (with Tkinter, included in the standard installer). The trainer does not work with the browser version. Get the game from its guides and download links: [azerothsurvivorsgame.com](https://azerothsurvivorsgame.com/) or [azerothsurvivors.games](https://azerothsurvivors.games/wow-survivors/).
+You need **Windows 10/11 (64-bit)**, **Python 3.12 or newer** (with Tkinter, included in the standard installer) and the **Windows build of Azeroth Survivors**. The trainer does not work with the browser version. Get the game from its guides and download links: [azerothsurvivorsgame.com](https://azerothsurvivorsgame.com/) or [azerothsurvivors.games](https://azerothsurvivors.games/wow-survivors/).
 
 ```bash
 git clone https://github.com/nelbin4/Azeroth-Survivors-Trainer.git
 cd Azeroth-Survivors-Trainer
 pip install -r requirements.txt
-```
-
-## First run
-
-> **Use it only in a solo run or a game you host. Never when joining someone else's game.** (Details below.)
-
-Start the game, then:
-
-```bash
 python game.py
 ```
 
-The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. You can rename your character in the lobby whenever you like; the name is re-detected for every run. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage. Run the trainer as administrator if the game runs elevated.
+## First run in detail
+
+The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. You can rename your character in the lobby whenever you like; the name is re-detected for every run. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage.
 
 Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`, adding `--name YourCharacter` if you want to pin one. Your settings are stored in `session.json` next to the program and are never uploaded.
 
 > ### Solo or host only — do not use it when joining a game
 > Use this trainer **only in a solo run, or in a game you are hosting**. Do **not** use it when you join someone else's game. As a guest, your stats are computed by the host and your PC only shows copies, so changes do nothing there, and tampering with a joined game can desync or disconnect you and disrupt the other players.
 >
-> Changing memory in a game can also crash it or corrupt a run, so use it at your own risk. Do not use it to disrupt other players. This is an unofficial fan tool, not affiliated with the game or its developer. No warranty; see [LICENSE](LICENSE).
+> Changing memory in a game can also crash it or corrupt a run, so use it at your own risk. Do not use it to disrupt other players.
 
 ## What it does
 
@@ -70,7 +97,8 @@ At startup (the window, or `--background`) the trainer checks GitHub for a newer
 | `python game.py find-wallet --gold 1234` | Learns the gold counter's location from an exact gold amount (read-only). |
 | `python game.py self-test` | Runs the built-in test suite. |
 | `python game.py --version` | Shows the version. |
-| `python game.py --no-update` | Not a command: add `--no-update` after any command (for example `python game.py gui --no-update`) to skip the startup update check. |
+
+Add `--no-update` after any command (for example `python game.py gui --no-update`) to skip the startup update check.
 
 In the window you can switch **Observe only / Write**, **Start / Stop**, and include or exclude each stat. Closing the window leaves the watcher running; press **Stop** to end it.
 
