@@ -22,7 +22,7 @@ Start the game, then:
 python game.py
 ```
 
-The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage. Run the trainer as administrator if the game runs elevated.
+The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. You can rename your character in the lobby whenever you like; the name is re-detected for every run. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage. Run the trainer as administrator if the game runs elevated.
 
 Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`, adding `--name YourCharacter` if you want to pin one. Your settings are stored in `session.json` next to the program and are never uploaded.
 
@@ -94,7 +94,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## Development
 
 ```bash
-python game.py self-test    # 36 tests, no game required
+python game.py self-test    # 38 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.

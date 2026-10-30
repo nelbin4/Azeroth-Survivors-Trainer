@@ -166,8 +166,10 @@ class AutoBackend:
     """Live access adapter. Discovery is incremental, cancellable and read-only."""
     def __init__(self,data,signal):
         self.data=data;self.signal=signal;self.process=None;self.memory=None;self.generation=None
-        self.recipe=dict(data.get('native_identity_recipe',{}));self.name=data.get('last_name') or self.recipe.get('name')
-        if not self.name or self.name.startswith('<'):self.name=None  # automatic: detected from memory
+        self.recipe=dict(data.get('native_identity_recipe',{}));pinned=self.recipe.get('name')
+        # A pinned name (setup --name) is used as is. Otherwise the name is re-detected for every run:
+        # players can rename their character in the lobby at any time.
+        self.pinned=bool(pinned) and not pinned.startswith('<');self.name=pinned if self.pinned else None
         self.detect_next=0;self.ambiguous_names=None;self.scene=None;self.scene_next=0;self.scene_busy=False
         if self.recipe.get('build','').lower()!=data['game_sha256'].lower():raise AutoBlocked('Identity recipe/build mismatch.')
         targets=[t for t in data['config']['targets'] if t[1] in AUTO_CORE_OFFSETS]
@@ -311,6 +313,9 @@ class AutoBackend:
     def at(self,base):
         # Discovery never gets the relaxed health rule for an unknown identity.
         return actor_snapshot(self.memory,self.process,base,self.recipe,self.name)
+    def release_name(self):
+        """New run or lost record: forget an auto-detected name so a rename in the lobby is picked up."""
+        if not self.pinned:self.name=None;self.detect_next=0;self.ambiguous_names=None
     def refresh_scene(self,now):
         """While no character is found: look at the screen (background capture) to say lobby, menu or unknown."""
         if now<self.scene_next or self.scene_busy or self.process is None:return
@@ -328,7 +333,7 @@ class AutoBackend:
     def detect_character(self,now):
         """No usable name yet (or it was not found): look for any valid character record and adopt its name."""
         if now<self.detect_next:return []
-        self.detect_next=now+30
+        self.detect_next=now+10
         recipe=dict(self.recipe,targets=self.targets)
         found=find_characters(self.memory,self.process,recipe,cancelled=lambda:self.signal.wait(0))
         names=sorted({c['name'] for c in found})
@@ -431,6 +436,7 @@ class AutoRecovery:
         self.last_values={};self.low=0;self.dup_key=None;self.dup={}
         self.last_progress=0;self.run=0;self.total_writes=0;self.state=dict(state='waiting_process')
     def forget(self):
+        if hasattr(self.backend,'release_name'):self.backend.release_name()
         self.candidate=None;self.last_level=None;self.baseline=None;self.confirmations=0;self.active=False;self.failures=0;self.last_values={};self.low=0;self.dup_key=None;self.dup={}
     def pick_live(self,candidates):
         """Copies of one record: only the live one changes (HP, level, gold). Pick it once exactly one moves."""
@@ -2460,6 +2466,15 @@ def self_test():
             backend.scene=None;self.assertEqual(engine.step()['state'],'seeking_record')
             backend.absent=False;backend.scene='menu'
             self.assertEqual(engine.step()['state'],'waiting_progress');self.assertIsNone(backend.scene)
+        def test_auto_name_is_released_for_each_run_but_pinned_name_is_kept(self):
+            auto=object.__new__(AutoBackend);auto.pinned=False;auto.name='Nelbin';auto.detect_next=99;auto.ambiguous_names=['x']
+            auto.release_name();self.assertIsNone(auto.name);self.assertEqual(auto.detect_next,0);self.assertIsNone(auto.ambiguous_names)
+            pinned=object.__new__(AutoBackend);pinned.pinned=True;pinned.name='Nelbin';pinned.detect_next=99;pinned.ambiguous_names=None
+            pinned.release_name();self.assertEqual(pinned.name,'Nelbin')
+        def test_run_reset_releases_the_name(self):
+            backend,clock,engine=self.recovery_fixture();backend.released=0
+            backend.release_name=lambda:setattr(backend,'released',backend.released+1)
+            engine.forget();self.assertEqual(backend.released,1)
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
