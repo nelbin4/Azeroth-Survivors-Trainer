@@ -17,3 +17,7 @@ venv/
 _ocr_server.ps1
 .update_backup/
 *.new
+build/
+dist/
+release/
+*.spec

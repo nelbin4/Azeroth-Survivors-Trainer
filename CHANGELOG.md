@@ -2,6 +2,7 @@
 
 ## 1.2.0 — 2026-10-31
 
+- Windows launcher exe (`launcher/launcher.py`, `build_exe.py`): bundles Python and the libraries, loads `game.py` from its folder so updates never need a new exe. Children it starts reset PyInstaller's environment so the background watcher survives the starting process.
 - Removed the automatic level-up card picking and everything built around it (damage-meter ranking, per-class card priorities, class and meter options). The trainer is now only the stat trainer plus the *in menu / in lobby* state. Screen reading is limited to the times no run is active.
 
 ## 1.1.0 — 2026-10-31

@@ -534,7 +534,7 @@ def prepare_auto_launch(args):
             if args.background:
                 argv=[sys.executable,str(Path(__file__).resolve()),'_auto_worker','--seconds',str(args.seconds)]
                 if args.trace_only:argv.append('--trace-only')
-                child=subprocess.Popen(argv,cwd=ROOT,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
+                child=subprocess.Popen(argv,cwd=ROOT,env=child_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
                 update_session(lambda current:current.update(auto_monitor=dict(pid=child.pid,created=psutil.Process(child.pid).create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only)))
                 print(f'Automatic non-pausing watcher started: PID {child.pid}. It waits for gameplay progression and reacquires new runs/processes. Stop: python game.py stop.')
@@ -1770,7 +1770,7 @@ def named_core():
     if args.background:
         update_session(lambda current:current.update(stop_requested=False))
         child=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'_named_core','--seconds',str(args.seconds)],
-            cwd=ROOT,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+            cwd=ROOT,env=child_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW)
         update_session(lambda current:current.update(named_monitor=dict(pid=child.pid,created=psutil.Process(child.pid).create_time(),state='starting')))
         print(f'Non-pausing name-guarded updater started: PID {child.pid}. Stop with python game.py stop.')
@@ -2144,6 +2144,11 @@ def detect_scene(lines,width,height):
     if sum(word in text for word in ('collection','drop tables','codex','talents','achievements','armory','rewards'))>=3:return 'menu'
     return 'unknown'
 
+def child_env(**extra):
+    """Environment for a re-launched copy of this program. Inside the bundled exe a child must not reuse the parent's
+    temporary folder (it vanishes when the parent exits), so ask the bootloader for a clean start."""
+    return dict(os.environ,PYINSTALLER_RESET_ENVIRONMENT='1',**extra)
+
 def parse_version(text):
     return tuple(int(part) for part in text.strip().split('.'))
 
@@ -2207,7 +2212,7 @@ def auto_update():
     return bool(version)
 
 def restart_after_update():
-    subprocess.Popen([sys.executable,str(Path(__file__).resolve()),*sys.argv[1:]],cwd=ROOT,env=dict(os.environ,AZEROTH_UPDATED='1'),
+    subprocess.Popen([sys.executable,str(Path(__file__).resolve()),*sys.argv[1:]],cwd=ROOT,env=child_env(AZEROTH_UPDATED='1'),
         stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
         creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW)
     sys.exit(0)
@@ -2363,7 +2368,7 @@ def gui():
     # python.exe always owns a console window; relaunch under pythonw.exe so only the window shows.
     exe=Path(sys.executable);windowless=exe.with_name('pythonw.exe')
     if exe.name.lower()=='python.exe' and windowless.exists() and not os.environ.get('AZEROTH_GUI_CHILD'):
-        subprocess.Popen([str(windowless),str(Path(__file__).resolve()),'gui'],cwd=ROOT,env=dict(os.environ,AZEROTH_GUI_CHILD='1'),
+        subprocess.Popen([str(windowless),str(Path(__file__).resolve()),'gui'],cwd=ROOT,env=child_env(AZEROTH_GUI_CHILD='1'),
             stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
             creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW)
         return
@@ -2648,6 +2653,7 @@ def self_test():
             data=self.auto_profile_fixture();next(t for t in data['config']['targets'] if t[1]==20)[3]=2.
             with self.assertRaises(AutoBlocked):AutoBackend(data,None)
         def test_stop_event_cross_process(self):
+            if getattr(sys,'frozen',False):self.skipTest('needs a Python interpreter for the child process')
             suffix='test-stop-'+uuid.uuid4().hex
             with StopSignal(suffix) as signal:
                 signal.reset();self.assertFalse(signal.wait(0))

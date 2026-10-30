@@ -1,10 +1,18 @@
 # Azeroth Survivors Trainer
 
-A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game,. It has a small window, a silent background mode, and a command line.
+A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game. It has a small window, a silent background mode, and a command line.
 
 ## Install
 
-You need **Windows 10/11 (64-bit)**, **Python 3.12 or newer** (with Tkinter, included in the standard installer), and the **Windows build of Azeroth Survivors**. The trainer does not work with the browser version. Get the game from its guides and download links: [azerothsurvivorsgame.com](https://azerothsurvivorsgame.com/) or [azerothsurvivors.games](https://azerothsurvivors.games/wow-survivors/).
+### Option A: the Windows program (no Python needed)
+
+Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. Everything below applies the same way (the first-run prompts, the window, updates). Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
+
+> Windows SmartScreen or your antivirus may warn about an unsigned program that reads another program's memory. That is expected for any trainer; the source of everything is in this repository.
+
+### Option B: with Python
+
+For either option you need **Windows 10/11 (64-bit)** and the **Windows build of Azeroth Survivors**; Option B also needs **Python 3.12 or newer** (with Tkinter, included in the standard installer). The trainer does not work with the browser version. Get the game from its guides and download links: [azerothsurvivorsgame.com](https://azerothsurvivorsgame.com/) or [azerothsurvivors.games](https://azerothsurvivors.games/wow-survivors/).
 
 ```bash
 git clone https://github.com/nelbin4/Azeroth-Survivors-Trainer.git
@@ -46,7 +54,7 @@ At startup (the window, or `--background`) the trainer checks GitHub for a newer
 - **What is replaced:** `game.py`, the docs, `profile.example.json`, `requirements.txt`. Your `session.json` and saves are never touched. Replaced files are backed up in `.update_backup/<old version>/`.
 - **Git checkouts** (developers) only fast-forward when you have no uncommitted changes.
 - **Trust:** updates come over HTTPS from this repository's `main` branch. Switch it off with the window's *Check GitHub for updates* box, or `"auto_update": false` in `session.json`, or start with `--no-update`.
-- If an update adds a new dependency, run `pip install -r requirements.txt` after it.
+- If an update adds a new dependency, run `pip install -r requirements.txt` after it (the exe needs a newer exe from the releases instead).
 
 ## Using it
 
@@ -95,6 +103,14 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - Errors from the window are written to `gui-error.log`.
 
 ## Development
+
+`launcher/launcher.py` is the whole exe: it imports the libraries `game.py` needs (so PyInstaller bundles them) and runs `game.py` from its own folder. Build it with:
+
+```bash
+pip install pyinstaller
+python build_exe.py            # windowed exe + release zip in release/
+python build_exe.py --console  # console build, handy for testing commands
+```
 
 ```bash
 python game.py self-test    # 41 tests, no game required
