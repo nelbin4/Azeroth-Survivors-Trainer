@@ -358,3 +358,18 @@ The exe is a PyInstaller one-file launcher that bundles Python and the libraries
 ## Game facts (from the game's public guides)
 
 Free fan-made survivors-like by a developer called Aethus, based on a World of Warcraft 1.12.1 reimplementation; nine classes (Warrior, Paladin, Hunter, Rogue, Priest, Shaman, Mage, Warlock, Druid). Windows saves are under `%APPDATA%\Roaming\wenilla-rogue`. Co-op for up to five players exists in newer versions. The guides give no per-class spell or build advice.
+
+## Modifier list findings (build 8829…8016, level 120 Hunter run)
+
+The character's modifier list (capacity 8, length 7 at the time) was tested entry by entry: each value was set to a distinctive number, the Run Stats panel was read, and the value was restored immediately.
+
+| Kind | Effect seen on the Run Stats panel |
+| --- | --- |
+| 17 | **Pet Damage** (1.0 shows as +100%; 4.44 showed +444%) |
+| 19 | **Vs Elites** (0.15 shows as +15%) |
+| 0, 1, 3, 4, 5 | No change on the Run Stats panel (they feed other values) |
+| 14 (lifesteal), 22 (thorns) | Not present in this list. Lifesteal showed 0.5% and thorns 0% without any entry |
+
+- **DoT stacks:** the record field at +68 is the bonus; the panel shows 1 + that value (3 showed as 4). While the watcher is not running the game resets the field after recalculations, which is why a panel screenshot can show the unmodified 4.
+- **Lives:** shows 0. No record field or list entry was found that changes it. It may exist only after an item or talent grants a life.
+- **Lifesteal, thorns, lives:** the only way to give them a value would be to insert new entries into the modifier list (one free slot existed). That was deliberately not done: the game rebuilds the list on level-ups and equipment changes, and writing a new entry's kind and the list length while the game may be appending to it risks corrupting game memory.

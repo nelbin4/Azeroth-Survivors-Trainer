@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1 — 2026-10-30
+
+- **Vs Elites** is now applied (modifier kind 19, confirmed by changing it and watching the Run Stats panel).
+- The background watcher is now started in its own process group, so a Ctrl+C aimed at the console that launched it can no longer stop it. (Suspected cause of the watcher stopping by itself; not confirmed.)
+- Findings recorded in the technical notes: DoT stacks display as 1 + the record field (the game resets that field whenever the watcher is not running), and lifesteal, thorns and lives have no entry in the modifier list.
+
 ## 1.2.0 — 2026-10-30
 
 - Pickup range, area, extra targets, echo and DoT stacks are now applied too (they were previously left alone). Experience is no longer locked to +200%: any multiplier from 1 to 1,000,000 is accepted; speed stays at +50%.

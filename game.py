@@ -19,7 +19,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.2.0'
+VERSION = '1.2.1'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -28,7 +28,7 @@ SESSION = ROOT / 'session.json'
 CHECKED_BUILDS = set()
 AUTO_CORE_OFFSETS = frozenset((0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,112,120))
 INTEGER_OFFSETS = (52,68,120)  # extra targets, DoT stacks, wallet are u32; the rest are f32
-AUTO_SOURCE_TARGETS = {14:99.984,28:99.99}
+AUTO_SOURCE_TARGETS = {14:99.984,19:99.99,28:99.99}  # lifesteal, vs elites/bosses, shielded (kind 19 confirmed against the Run Stats panel)
 
 class StopSignal:
     """Workspace-scoped manual-reset event; avoids JSON polling in the hot loop."""
@@ -535,7 +535,7 @@ def prepare_auto_launch(args):
                 argv=[sys.executable,str(Path(__file__).resolve()),'_auto_worker','--seconds',str(args.seconds)]
                 if args.trace_only:argv.append('--trace-only')
                 child=subprocess.Popen(argv,cwd=ROOT,env=child_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+                    stderr=subprocess.DEVNULL,creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW)  # own process group: a Ctrl+C aimed at the launching console must not stop the watcher
                 update_session(lambda current:current.update(auto_monitor=dict(pid=child.pid,created=psutil.Process(child.pid).create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only)))
                 print(f'Automatic non-pausing watcher started: PID {child.pid}. It waits for gameplay progression and reacquires new runs/processes. Stop: python game.py stop.')
                 return True

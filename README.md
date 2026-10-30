@@ -120,7 +120,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **Windows build only.** The browser version is not supported.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Target values live in `session.json` (`config.targets`); a displayed `+N%` is the multiplier `1 + N/100` (for example +200% experience = 3.0). Speed is locked at +50%; experience may be set from 1 to 1,000,000. Extreme values can make the game misbehave (for example many level-ups per second).
-- **Not covered:** lives, thorns, lifesteal, vs elites and pet damage. They are not plain fields in the character record (they come from its modifier list, which the game rebuilds), so the trainer leaves them alone.
+- **Not covered:** lives, thorns, lifesteal and pet damage. Lives, thorns and lifesteal were not found as editable values at all in the character's data (they appear to exist only once you own something that grants them); pet damage is simply not applied. Vs elites and DoT stacks are covered, but the game resets them whenever the trainer is not running, so keep the watcher running.
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.
 
