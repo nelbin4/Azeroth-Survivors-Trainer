@@ -325,7 +325,7 @@ class AutoBackend:
             try:
                 handle=game_window(pid)
                 if handle:
-                    path=Path(tempfile.gettempdir())/'azeroth_scene.png'
+                    path=shot_path('scene')
                     width,height=capture_window(handle,path);self.scene=detect_scene(ocr_lines(path),width,height)
             except Exception:self.scene=None
             finally:self.scene_busy=False
@@ -550,6 +550,7 @@ def auto_command():
         runtime=dict(pid=os.getpid(),created=psutil.Process().create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only,pauses=False)
         update_session(lambda current:current.update(auto_monitor=runtime))
         deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;last_identity=None;card_level=[None];picking=[False]
+        if not args.trace_only:threading.Thread(target=lambda:ocr_server(),daemon=True).start()
         def card_note(text):
             def add(current):
                 log=current.setdefault('card_log',[]);log.append(dict(time=time.time(),text=text));current['card_log']=log[-30:]
@@ -589,7 +590,7 @@ def auto_command():
                             if state.get('state')=='applying' and not args.trace_only and backend.injected:
                                 current['auto_last_verified']=dict(pid=c['pid'],created=c['created'],base=c['base'],player_id=c['player_id'],build=backend.build,time=time.time())
                     update_session(publish);last_save=time.monotonic();last_saved=state.get('state')
-                signal.wait(.05 if state.get('state')=='learning' and state.get('phase')=='scan' else .1 if state.get('state')=='seeking_record' else 1. if state.get('state') in ('in_lobby','in_menu') else (2 if state.get('state') in ('waiting_process','blocked') else 1. if state.get('state')=='waiting_progress' else .4))
+                signal.wait(.05 if state.get('state')=='learning' and state.get('phase')=='scan' else .1 if state.get('state')=='seeking_record' else 1. if state.get('state') in ('in_lobby','in_menu') else (2 if state.get('state') in ('waiting_process','blocked') else .5 if state.get('state')=='waiting_progress' else .25))
             runtime.update(state='stopped' if signal.wait(0) else 'expired',heartbeat=time.time())
         except (KeyboardInterrupt,InterruptedError):runtime.update(state='stopped',heartbeat=time.time())
         except Exception as error:runtime.update(state='failed',reason=str(error),heartbeat=time.time())
@@ -2018,8 +2019,17 @@ def game_window(pid):
     user.EnumWindows(callback(visit),0)
     return found[0] if found else None
 
-def capture_window(handle,path):
-    """Background capture (PrintWindow): no focus change, no cursor movement, nothing visible to the player."""
+_SHOTS=[0]
+
+def shot_path(tag):
+    """A fresh file per capture: the recognizer may still hold the previous one open."""
+    import tempfile
+    _SHOTS[0]+=1
+    return Path(tempfile.gettempdir())/f'azeroth_{tag}_{os.getpid()}_{_SHOTS[0]}.bmp'
+
+def capture_window(handle,path,top=0.,bottom=1.):
+    """Background capture (PrintWindow): no focus change, no cursor movement, nothing visible to the player.
+    top/bottom crop the saved image (fractions of the height); returns the full client size."""
     import numpy as np
     from PIL import Image
     from ctypes import wintypes as wt
@@ -2032,23 +2042,89 @@ def capture_window(handle,path):
         class Info(ctypes.Structure):_fields_=[('s',wt.DWORD),('w',wt.LONG),('h',wt.LONG),('p',wt.WORD),('b',wt.WORD),('c',wt.DWORD),('si',wt.DWORD),('x',wt.LONG),('y',wt.LONG),('u',wt.DWORD),('i',wt.DWORD)]
         info=Info(ctypes.sizeof(Info),width,-height,1,32,0,0,0,0,0,0);buffer=ctypes.create_string_buffer(width*height*4)
         gdi.GetDIBits(mem,bitmap,0,height,buffer,ctypes.byref(info),0)
-        Image.fromarray(np.frombuffer(buffer,dtype=np.uint8).reshape(height,width,4)[:,:,[2,1,0]]).save(path)
+        pixels=np.frombuffer(buffer,dtype=np.uint8).reshape(height,width,4)[int(top*height):int(bottom*height),:,[2,1,0]]
+        Image.fromarray(np.ascontiguousarray(pixels)).save(path,'BMP')
     finally:
         gdi.DeleteObject(bitmap);gdi.DeleteDC(mem);user.ReleaseDC(handle,hdc)
     return width,height
 
-def ocr_lines(path):
-    script=ROOT/'_ocr.ps1'
-    if not script.exists() or script.read_text(encoding='utf-8')!=OCR_SCRIPT:script.write_text(OCR_SCRIPT,encoding='utf-8')
-    run=subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',str(script),'-Path',str(path)],
-        capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW,timeout=30)
+OCR_SERVER_SCRIPT = OCR_SCRIPT.split('$file=Await')[0].replace('param([string]$Path)\n','') + r"""
+$eng=[Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+[Console]::InputEncoding=[System.Text.Encoding]::UTF8
+[Console]::Out.WriteLine('READY');[Console]::Out.Flush()
+while($true){
+  $Path=[Console]::In.ReadLine()
+  if($Path -eq $null -or $Path -eq 'QUIT'){break}
+  try{
+    $file=Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($Path)) ([Windows.Storage.StorageFile])
+    $stream=Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+    $dec=Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $bmp=Await ($dec.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $res=Await ($eng.RecognizeAsync($bmp)) ([Windows.Media.Ocr.OcrResult])
+    foreach($l in $res.Lines){
+      $x1=[double]::MaxValue;$y1=[double]::MaxValue;$x2=0;$y2=0
+      foreach($w in $l.Words){$r=$w.BoundingRect;if($r.X -lt $x1){$x1=$r.X};if($r.Y -lt $y1){$y1=$r.Y};if(($r.X+$r.Width) -gt $x2){$x2=$r.X+$r.Width};if(($r.Y+$r.Height) -gt $y2){$y2=$r.Y+$r.Height}}
+      [Console]::Out.WriteLine(('{0},{1},{2},{3}|{4}' -f [int]$x1,[int]$y1,[int]$x2,[int]$y2,$l.Text))
+    }
+    $stream.Dispose()
+  }catch{[Console]::Out.WriteLine('ERR|'+$_.Exception.Message)}
+  [Console]::Out.WriteLine('END');[Console]::Out.Flush()
+}
+"""
+
+def parse_ocr_rows(rows):
     lines=[]
-    for row in run.stdout.decode('utf-8',errors='replace').splitlines():
+    for row in rows:
         box,_,text=row.partition('|')
         try:x1,y1,x2,y2=[int(v) for v in box.split(',')]
         except ValueError:continue
         lines.append((x1,y1,x2,y2,text.strip()))
     return lines
+
+class OcrServer:
+    """One long-lived PowerShell process holding Windows' text recognizer: no start-up cost per look."""
+    def __init__(self):
+        script=ROOT/'_ocr_server.ps1'
+        if not script.exists() or script.read_text(encoding='utf-8')!=OCR_SERVER_SCRIPT:script.write_text(OCR_SERVER_SCRIPT,encoding='utf-8')
+        self.lock=threading.Lock()
+        self.process=subprocess.Popen(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',str(script)],stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,creationflags=subprocess.CREATE_NO_WINDOW)
+        if self.process.stdout.readline().decode('utf-8-sig','replace').strip()!='READY':raise RuntimeError('Text recognizer did not start.')
+    def read(self,path):
+        with self.lock:
+            self.process.stdin.write((str(path)+'\n').encode('utf-8'));self.process.stdin.flush()
+            rows=[]
+            while True:
+                raw=self.process.stdout.readline()
+                if not raw:raise RuntimeError('Text recognizer stopped.')
+                row=raw.decode('utf-8','replace').rstrip('\r\n')
+                if row=='END':break
+                if row.startswith('ERR|'):raise RuntimeError(row[4:])
+                rows.append(row)
+        return parse_ocr_rows(rows)
+    def close(self):
+        try:self.process.stdin.write(b'QUIT\n');self.process.stdin.flush();self.process.wait(timeout=2)
+        except Exception:self.process.kill()
+
+_OCR=[None]
+
+def ocr_server():
+    if _OCR[0] is None or _OCR[0].process.poll() is not None:_OCR[0]=OcrServer()
+    return _OCR[0]
+
+def ocr_lines(path):
+    try:
+        lines=ocr_server().read(path)
+        try:Path(path).unlink()
+        except OSError:pass
+        return lines
+    except Exception:
+        _OCR[0]=None  # fall back to a one-shot run
+    script=ROOT/'_ocr.ps1'
+    if not script.exists() or script.read_text(encoding='utf-8')!=OCR_SCRIPT:script.write_text(OCR_SCRIPT,encoding='utf-8')
+    run=subprocess.run(['powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',str(script),'-Path',str(path)],
+        capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW,timeout=30)
+    return parse_ocr_rows(run.stdout.decode('utf-8',errors='replace').splitlines())
 
 def parse_cards(lines,width,height):
     """Group OCR lines into card columns. A popup is active only if the header area says Level Up."""
@@ -2086,6 +2162,14 @@ def choose_card(texts):
             if best is None or key<best:best=key
     return None if best is None else dict(index=best[1],mode='upgrade',rank=CARD_UPGRADES[best[0][0]])
 
+def fallback_card(texts):
+    """Nothing on the priority lists: take the rarest card offered (never skip, never reroll); ties go to the first."""
+    rarity=('legendary','epic','rare','uncommon')
+    def score(text):
+        text=text.lower()
+        return next((len(rarity)-i for i,name in enumerate(rarity) if name in text),0)
+    return max(range(len(texts)),key=lambda i:(score(texts[i]),-i))
+
 def press_key(handle,virtual_key):
     user=ctypes.WinDLL('user32',use_last_error=True);user.PostMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
     scan=user.MapVirtualKeyW(virtual_key,0)
@@ -2097,36 +2181,45 @@ def click_window(handle,x,y):
     position=(int(y)<<16)|int(x)
     user.PostMessageW(handle,0x200,0,position);user.PostMessageW(handle,0x201,1,position);time.sleep(.06);user.PostMessageW(handle,0x202,0,position)
 
-def look(handle):
+def look(handle,top=0.,bottom=1.):
+    """Capture (optionally only a vertical band) and read the text; coordinates are returned in full-window terms."""
     import tempfile
-    path=Path(tempfile.gettempdir())/'azeroth_cards.png'
-    width,height=capture_window(handle,path)
-    return parse_cards(ocr_lines(path),width,height),width,height
+    path=shot_path('cards')
+    width,height=capture_window(handle,path,top,bottom);shift=int(top*height)
+    lines=[(x1,y1+shift,x2,y2+shift,t) for x1,y1,x2,y2,t in ocr_lines(path)]
+    return parse_cards(lines,width,height),width,height
 
-def pick_cards(pid,note,max_rerolls=8,wait=6.):
-    """After a level-up: read the cards, choose by priority, reroll when nothing wanted, press the card's number key."""
+def popup_open(handle):
+    """Fast check: is the Level Up header on screen? Reads only a thin band at the top of the popup."""
+    import tempfile
+    path=shot_path('header')
+    width,height=capture_window(handle,path,.2,.45)
+    return 'level up' in ' '.join(t for *_,t in ocr_lines(path)).lower()
+
+def pick_cards(pid,note,wait=4.):
+    """After a level-up: wait for the popup, read the cards, choose by priority and press the number key. Never rerolls or skips."""
     handle=game_window(pid)
     if not handle:note('Level-up cards: game window not found.');return
-    start=time.monotonic();deadline=start+wait;rerolls=0;picks=0
-    while picks<6 and time.monotonic()-start<90:
-        info,width,height=look(handle)
-        if not info['active'] or not info['columns']:
-            if time.monotonic()>deadline:break
-            time.sleep(.5);continue
+    start=time.monotonic();end_wait=start+wait;picks=0
+    while picks<6 and time.monotonic()-start<60:
+        if not popup_open(handle):
+            if time.monotonic()>end_wait:break
+            continue  # the recognizer itself paces this loop; no fixed sleeps
+        info,width,height=look(handle,.45,.9)
+        if len(info['columns'])<2:continue  # cards still animating in
         texts=[c['text'] for c in info['columns']];choice=choose_card(texts)
-        if choice is None and rerolls<max_rerolls:
-            press_key(handle,0x52);rerolls+=1;note(f'No wanted card; reroll {rerolls}/{max_rerolls}.');time.sleep(1.2);continue
-        if choice is None:choice=dict(index=0,mode='fallback',rank='first card')
-        index=choice['index'];press_key(handle,0x31+index);time.sleep(1.4)
-        again,_,_=look(handle)
-        if again['active'] and again['columns'] and [c['text'] for c in again['columns']]==texts:
-            click_window(handle,info['columns'][index]['x'],height*.6);time.sleep(1.4)
-            again,_,_=look(handle);how='click'
-        else:how='key'
-        still=again['active'] and bool(again['columns']) and [c['text'] for c in again['columns']]==texts
-        note(f"Level-up cards: chose #{index+1} ({choice['mode']}: {choice['rank']}) by {how}"+('; popup still open' if still else '.'))
-        if still:break
-        picks+=1;rerolls=0;deadline=time.monotonic()+2.5
+        if choice is None:choice=dict(index=fallback_card(texts),mode='fallback',rank='rarest card')
+        index=choice['index'];press_key(handle,0x31+index);how='key'
+        closed=False
+        for attempt in range(2):
+            deadline=time.monotonic()+1.6
+            while time.monotonic()<deadline:
+                if not popup_open(handle):closed=True;break
+            if closed:break
+            if attempt==0:click_window(handle,info['columns'][index]['x'],height*.6);how='click'
+        note(f"Level-up cards: chose #{index+1} ({choice['mode']}: {choice['rank']}) by {how}"+('.' if closed else '; popup still open.'))
+        if not closed:break
+        picks+=1;end_wait=time.monotonic()+.8  # another popup may follow a multi-level gain
     note(f'Level-up cards: done ({picks} pick(s)).')
 
 def window_player_name(pid,names):
@@ -2134,7 +2227,7 @@ def window_player_name(pid,names):
     import tempfile
     handle=game_window(pid)
     if not handle:return None
-    path=Path(tempfile.gettempdir())/'azeroth_name.png'
+    path=shot_path('name')
     width,height=capture_window(handle,path)
     lines=sorted((y1,t) for x1,y1,x2,y2,t in ocr_lines(path) if x1<width*.3 and y1<height*.25)
     for _,text in lines:
@@ -2475,6 +2568,15 @@ def self_test():
             backend,clock,engine=self.recovery_fixture();backend.released=0
             backend.release_name=lambda:setattr(backend,'released',backend.released+1)
             engine.forget();self.assertEqual(backend.released,1)
+        def test_ocr_rows_are_parsed_and_bad_rows_skipped(self):
+            self.assertEqual(parse_ocr_rows(['10,20,110,50|Hammer of Wrath','junk','1,2,3|short','5,6,7,8|']),[(10,20,110,50,'Hammer of Wrath'),(5,6,7,8,'')])
+        def test_fallback_takes_the_rarest_card_and_never_skips(self):
+            self.assertEqual(fallback_card(['common x','epic y','legendary z','rare w']),2)
+            self.assertEqual(fallback_card(['legendary a','legendary b']),0)
+            self.assertEqual(fallback_card(['x','y','z']),0)
+        def test_pick_cards_never_presses_reroll(self):
+            import inspect
+            self.assertNotIn('0x52',inspect.getsource(pick_cards))
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')

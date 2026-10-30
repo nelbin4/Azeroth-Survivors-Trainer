@@ -37,7 +37,7 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 - **Stat trainer.** Keeps max/current HP, damage, crit, crit damage, speed, XP, regeneration, luck, gold and more at your targets. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups.
 - **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only.
 - **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
-- **Level-up card picker (experimental).** Reads the popup from a background window capture with Windows' built-in text recognition, picks by your priority list, rerolls if nothing you want is offered, and presses the card's number key (the game's own hotkeys: 1–3 or 1–4 to pick, R to reroll). Nothing is shown on or moved on your screen.
+- **Level-up card picker (experimental).** Reads the popup from a background window capture with Windows' built-in text recognition, picks by your priority list, and presses the card's number key (the game's own hotkeys: 1–3 or 1–4). It never rerolls and never skips. It reads the popup in a fraction of a second. Nothing is shown on or moved on your screen.
 - **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
 
 ## Using it
@@ -62,7 +62,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 
 - **New spell cards:** Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield (a Paladin list).
 - **Upgrade cards:** area of effect, then cooldown, then luck, then everything else.
-- If nothing on the list is offered, it rerolls (up to 8 times per level-up), then takes the first card.
+- If nothing on the list is offered, it takes the rarest card (legendary, then epic, then rare). It never rerolls and never skips.
 
 ## How it stays safe
 
@@ -94,7 +94,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## Development
 
 ```bash
-python game.py self-test    # 38 tests, no game required
+python game.py self-test    # 41 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.

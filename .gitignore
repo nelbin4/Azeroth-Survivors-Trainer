@@ -14,3 +14,4 @@ venv/
 # Captures and scratch
 *.png
 *.log
+_ocr_server.ps1
