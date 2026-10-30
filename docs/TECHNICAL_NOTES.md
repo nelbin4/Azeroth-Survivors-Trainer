@@ -313,3 +313,7 @@ Native progress was previously observed at `%APPDATA%\wenilla-rogue\characters.t
 
 These changes are runtime memory updates. Persistence in a save or across executable restarts is not implied. No game installation, AppData save, or Squalr dependency was changed by the documentation refresh.
 
+
+## Name-free character detection (tried, rejected)
+
+Scanning memory for the stat block by structure alone (player ID, level, plausible stats, modifier table) was tried on a live game in the main menu. It found many records, not only the player: enemies and stale records from earlier runs share the same structure (for example max health 22.4 at level 1, IDs 33 and 166). It also took about 53 seconds per scan. A character is distinguished by the name header stored next to its stats, so automatic detection keys on the presence of a valid name header, not on a configured name. That scan takes about 17 seconds and needs no name from the user.
