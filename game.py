@@ -2613,17 +2613,20 @@ def self_test():
             self.assertNotIn('0x52',inspect.getsource(pick_cards))
         def test_hunter_priorities_and_class_detection(self):
             config=load_card_config()
-            texts=['legendary multi shot new spell fires','epic explosive trap new spell lays','rare auto shot new spell']
+            texts=['legendary multi shot new spell fires','epic explosive trap new spell lays','rare volley new spell']
             self.assertEqual(detect_card_class(texts,config),'Hunter')
             cls,choice=choose_for_class(texts,config)
-            self.assertEqual((cls,choice['index'],choice['rank']),('Hunter',1 if False else 0,'multi shot'))
-            cls,choice=choose_for_class(['epic explosive trap new spell','rare multi-shot new spell'],config,'Hunter')
-            self.assertEqual(choice['rank'],'multi shot')
+            self.assertEqual((cls,choice['index'],choice['rank']),('Hunter',2,'volley'))
+            cls,choice=choose_for_class(['epic immolation trap new spell','rare aimed shot new spell','epic explosive trap new spell'],config,'Hunter')
+            self.assertEqual((choice['index'],choice['rank']),(2,'explosive trap'))
+            cls,choice=choose_for_class(['epic immolation trap new spell','rare aimed shot new spell'],config,'Hunter')
+            self.assertEqual(choice['rank'],'aimed shot')
+            self.assertIsNone(choose_for_class(['legendary multi shot new spell','rare arcane shot new spell'],config,'Hunter')[1])
         def test_paladin_cards_are_not_chosen_by_hunter_lists(self):
             config=load_card_config()
-            texts=['legendary consecration new spell','epic multi shot new spell']
+            texts=['legendary consecration new spell','epic volley new spell']
             self.assertEqual(choose_for_class(texts,config,'Paladin')[1]['rank'],'consecration')
-            self.assertEqual(choose_for_class(texts,config,'Hunter')[1]['rank'],'multi shot')
+            self.assertEqual(choose_for_class(texts,config,'Hunter')[1]['rank'],'volley')
         def test_upgrade_keywords_come_from_the_config_and_percent_beats_count(self):
             self.assertEqual(choose_card(['+2 targets','+20% area','+9% damage'])['index'],1)
             self.assertEqual(choose_card(['+10% damage','+40% damage'],upgrades=['damage'])['index'],1)

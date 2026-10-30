@@ -30,35 +30,35 @@
     "Hunter": {
       "spells": [
         "volley",
-        "multi shot",
         "explosive trap",
-        "immolation trap",
-        "arcane shot",
-        "serpent sting",
         "aimed shot",
-        "rapid fire",
-        "concussive shot",
-        "wing clip"
+        "immolation trap"
       ],
       "known": [
+        "arcane shot",
+        "aspect of the hawk",
+        "aspect of the monkey",
         "auto shot",
-        "raptor strike",
-        "mongoose bite",
-        "hunters mark",
-        "scatter shot",
+        "bestial wrath",
+        "concussive shot",
+        "counterattack",
+        "disengage",
+        "distracting shot",
         "freezing trap",
         "frost trap",
-        "viper sting",
-        "scorpid sting",
-        "wyvern sting",
+        "hunters mark",
         "mend pet",
-        "bestial wrath",
-        "distracting shot",
-        "disengage",
-        "counterattack",
+        "mongoose bite",
+        "multi shot",
+        "rapid fire",
+        "raptor strike",
+        "scatter shot",
+        "scorpid sting",
+        "serpent sting",
         "trueshot aura",
-        "aspect of the hawk",
-        "aspect of the monkey"
+        "viper sting",
+        "wing clip",
+        "wyvern sting"
       ]
     }
   }

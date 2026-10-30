@@ -60,7 +60,7 @@ In the window you can switch **Observe only / Write**, **Start / Stop**, include
 
 Priorities live in [`card_priorities.json`](card_priorities.json), one list per class. Edit it freely; the trainer reads it for every popup.
 
-- **`spells`** — new-spell cards, best first. Ships with a Paladin list (Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield) and a **Hunter starting list** (Volley, Multi-Shot, Explosive Trap, Immolation Trap, Arcane Shot, Serpent Sting, Aimed Shot, Rapid Fire, Concussive Shot, Wing Clip). The Hunter order is a starting guess, not taken from a guide — adjust it to your playstyle.
+- **`spells`** — new-spell cards, best first. Ships with a Paladin list (Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield) and a Hunter list (Volley, Explosive Trap, Aimed Shot, Immolation Trap; any other Hunter spell is not ranked, so the rarest card is taken).
 - **`upgrades`** — keywords for upgrade cards ("Improves a spell you know"), best first: area, cooldown, luck by default. A larger percentage wins a tie.
 - **`known`** — extra spell names used only to recognise the class.
 - **Class choice:** `auto` recognises the class from the spell names on the popup. Or pick one in the window's **Card class** box.
