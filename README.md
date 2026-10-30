@@ -2,7 +2,10 @@
 
 A Windows trainer for **Azeroth Survivors**. It finds your character in the game's memory by name, applies the stat values you choose without pausing or hooking the game, and can pick level-up cards for you from a priority list. It has a small window, a silent background mode, and a command line.
 
-> **Use it responsibly.** Changing memory in a game can crash it, corrupt a run, or get you disconnected. Use it in solo runs or as host. It does nothing useful as a guest in someone else's game (the host owns your stats there). Do not use it to disrupt other players. This is an unofficial fan tool, not affiliated with the game's developers. No warranty; see [LICENSE](LICENSE).
+> ### Solo or host only — do not use it when joining a game
+> Use this trainer **only in a solo run, or in a game you are hosting**. Do **not** use it when you join someone else's game. As a guest, your stats are computed by the host and your PC only shows copies, so changes do nothing there, and tampering with a joined game can desync or disconnect you and disrupt the other players.
+>
+> Changing memory in a game can also crash it or corrupt a run, so use it at your own risk. Do not use it to disrupt other players. This is an unofficial fan tool, not affiliated with the game's developers. No warranty; see [LICENSE](LICENSE).
 
 ## What it does
 
@@ -68,7 +71,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 
 ## Limitations
 
-- **Host or solo only.** As a guest, your PC holds display copies refreshed from the host every tick; writes there have no effect.
+- **Solo or host only — never when joining a game.** As a guest, your PC holds display copies refreshed from the host every tick; writes there have no effect and can cause problems for other players.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - The card picker is new. Validate it with `cards-test` before relying on it, and report what the popup looks like if it misreads.
@@ -77,7 +80,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## Troubleshooting
 
 - **"Not configured yet"** — run the window once, or `setup`.
-- **State stays "seeking record"** — you are probably in a lobby or a guest game, or the name does not match exactly.
+- **State stays "seeking record"** — you are probably in a lobby or in someone else's game (not supported), or the name does not match exactly.
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
 - Errors from the window are written to `gui-error.log`.

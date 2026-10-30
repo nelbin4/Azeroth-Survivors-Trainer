@@ -2111,6 +2111,7 @@ class WatcherWindow:
             box=ttk.LabelFrame(head,text=label);box.grid(row=0,column=col,sticky='nsew',padx=4);head.columnconfigure(col,weight=1)
             lab=ttk.Label(box,textvariable=var,font=('Segoe UI',11,'bold'));lab.pack(padx=8,pady=6,anchor='w')
             if col==0:self.state_label=lab
+        ttk.Label(root,text="For solo or host runs only. Do not use when joining someone else's game.",foreground='#b26a00').pack(anchor='w',padx=12)
         ctl=ttk.Frame(root);ctl.pack(fill='x',**pad)
         ttk.Button(ctl,text='Start',command=self.start).pack(side='left')
         ttk.Button(ctl,text='Stop',command=self.stop).pack(side='left',padx=6)
