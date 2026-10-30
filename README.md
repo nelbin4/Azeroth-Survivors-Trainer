@@ -1,28 +1,10 @@
 # Azeroth Survivors Trainer
 
-A Windows trainer for **Azeroth Survivors**. It finds your character in the game's memory by name, applies the stat values you choose without pausing or hooking the game, and can pick level-up cards for you from a priority list. It has a small window, a silent background mode, and a command line.
-
-> ### Solo or host only — do not use it when joining a game
-> Use this trainer **only in a solo run, or in a game you are hosting**. Do **not** use it when you join someone else's game. As a guest, your stats are computed by the host and your PC only shows copies, so changes do nothing there, and tampering with a joined game can desync or disconnect you and disrupt the other players.
->
-> Changing memory in a game can also crash it or corrupt a run, so use it at your own risk. Do not use it to disrupt other players. This is an unofficial fan tool, not affiliated with the game's developers. No warranty; see [LICENSE](LICENSE).
-
-## What it does
-
-- **Automatic character detection.** Finds your character in memory by structure, not by a fixed name. In a solo run it is the only character; when hosting with others it picks the one listed first in your player frame (read from a background capture). Names it has seen are remembered.
-- **Stat trainer.** Keeps max/current HP, damage, crit, crit damage, speed, XP, regeneration, luck, gold and more at your targets. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups.
-- **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only.
-- **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
-- **Level-up card picker (experimental).** Reads the popup from a background window capture with Windows' built-in text recognition, picks by your priority list, rerolls if nothing you want is offered, and presses the card's number key. Nothing is shown on or moved on your screen.
-- **Safe by default.** The window opens in the mode you choose, every field can be switched off, and an observe-only mode never writes.
-
-## Requirements
-
-- Windows 10/11, 64-bit.
-- Python 3.12 or newer with Tkinter (included in the standard installer).
-- The game, installed. Run the trainer as administrator if the game runs elevated.
+A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game, and can pick level-up cards for you from a priority list. It has a small window, a silent background mode, and a command line.
 
 ## Install
+
+You need **Windows 10/11 (64-bit)**, **Python 3.12 or newer** (with Tkinter, included in the standard installer), and the **Windows build of Azeroth Survivors**. The trainer does not work with the browser version. Get the game from its guides and download links: [azerothsurvivorsgame.com](https://azerothsurvivorsgame.com/) or [azerothsurvivors.games](https://azerothsurvivors.games/wow-survivors/).
 
 ```bash
 git clone https://github.com/nelbin4/Azeroth-Survivors-Trainer.git
@@ -32,11 +14,31 @@ pip install -r requirements.txt
 
 ## First run
 
+> **Use it only in a solo run or a game you host. Never when joining someone else's game.** (Details below.)
+
+Start the game, then:
+
 ```bash
 python game.py
 ```
 
-The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. (Command line: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`, with `--name YourCharacter` if you want to pin one.) Your settings are stored in `session.json` next to the program and are never uploaded.
+The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage. Run the trainer as administrator if the game runs elevated.
+
+Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`, adding `--name YourCharacter` if you want to pin one. Your settings are stored in `session.json` next to the program and are never uploaded.
+
+> ### Solo or host only — do not use it when joining a game
+> Use this trainer **only in a solo run, or in a game you are hosting**. Do **not** use it when you join someone else's game. As a guest, your stats are computed by the host and your PC only shows copies, so changes do nothing there, and tampering with a joined game can desync or disconnect you and disrupt the other players.
+>
+> Changing memory in a game can also crash it or corrupt a run, so use it at your own risk. Do not use it to disrupt other players. This is an unofficial fan tool, not affiliated with the game or its developer. No warranty; see [LICENSE](LICENSE).
+
+## What it does
+
+- **Automatic character detection.** Finds your character in memory by structure, not by a fixed name. In a solo run it is the only character; when hosting with others it picks the one listed first in your player frame (read from a background capture). Names it has seen are remembered.
+- **Stat trainer.** Keeps max/current HP, damage, crit, crit damage, speed, XP, regeneration, luck, gold and more at your targets. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups.
+- **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only.
+- **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
+- **Level-up card picker (experimental).** Reads the popup from a background window capture with Windows' built-in text recognition, picks by your priority list, rerolls if nothing you want is offered, and presses the card's number key (the game's own hotkeys: 1–3 or 1–4 to pick, R to reroll). Nothing is shown on or moved on your screen.
+- **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
 
 ## Using it
 
@@ -58,7 +60,7 @@ In the window you can switch **Observe only / Write**, **Start / Stop**, include
 
 Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 
-- **New spell cards:** Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield.
+- **New spell cards:** Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield (a Paladin list).
 - **Upgrade cards:** area of effect, then cooldown, then luck, then everything else.
 - If nothing on the list is offered, it rerolls (up to 8 times per level-up), then takes the first card.
 
@@ -73,6 +75,7 @@ Defaults (edit `CARD_SPELLS` and `CARD_UPGRADES` in `game.py`):
 ## Limitations
 
 - **Solo or host only — never when joining a game.** As a guest, your PC holds display copies refreshed from the host every tick; writes there have no effect and can cause problems for other players.
+- **Windows build only.** The browser version is not supported.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - The card picker is new. Validate it with `cards-test` before relying on it, and report what the popup looks like if it misreads.
