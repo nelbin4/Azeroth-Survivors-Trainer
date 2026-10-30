@@ -100,7 +100,7 @@ At startup (the window, or `--background`) the trainer checks GitHub for a newer
 
 Add `--no-update` after any command (for example `python game.py gui --no-update`) to skip the startup update check.
 
-In the window you can switch **Observe only / Write**, **Start / Stop**, and include or exclude each stat. Closing the window leaves the watcher running; press **Stop** to end it.
+In the window you can switch **Observe only / Write**, **Start / Stop**, include or exclude each stat, and **type a new target** for any stat (press Enter; the watcher restarts to use it). A sentence under the title says what the trainer is doing, and *What's new* shows the latest release notes. Closing the window leaves the watcher running; press **Stop** to end it.
 
 ## What it looks at on screen
 
@@ -146,7 +146,7 @@ python build_exe.py --console  # console build, handy for testing commands
 ```
 
 ```bash
-python game.py self-test    # 41 tests, no game required
+python game.py self-test    # 43 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.

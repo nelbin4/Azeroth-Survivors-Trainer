@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0 — 2026-10-30
+
+- Window: a plain-English status line instead of state codes; the Target column is editable (typed values are validated, saved, and the watcher restarts to use them; speed stays locked); a *What's new* button shows the latest release notes.
+
 ## 1.2.1 — 2026-10-30
 
 - **Vs Elites** is now applied (modifier kind 19, confirmed by changing it and watching the Run Stats panel).

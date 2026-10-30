@@ -19,7 +19,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.2.1'
+VERSION = '1.3.0'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2258,6 +2258,41 @@ def effective_targets(data,digest):
     if 'wallet_offset' in learned:skip.discard(120);moved['Gold Wallet']=learned['wallet_offset']
     return [(n,moved.get(n,o),f,v) for n,o,f,v in base if o not in skip and moved.get(n,o)!=-1]
 
+def describe_state(monitor,state):
+    """One plain sentence for the window, instead of a state code."""
+    reason=monitor.get('reason')
+    sentences={
+        'starting':'Starting up...',
+        'waiting_process':'Waiting for Azeroth Survivors to start.',
+        'in_menu':"You're in the menu. Start a run (solo or host) to begin.",
+        'in_lobby':"You're in the lobby. Start the run to begin.",
+        'seeking_record':'Looking for your character. Start a run (solo or host).',
+        'waiting_progress':'Character found. Your stats are applied once you level up or take damage.',
+        'applying':'Your stats are being applied and kept at your targets.',
+        'learning':'Learning this new game version (read-only). Stay in a run and level up once.',
+        'learned':'Learned this game version. Continuing.',
+        'recovering':'Reconnecting to your character...',
+        'blocked_ambiguous':'Several characters were found and yours could not be told apart.',
+        'blocked':'Blocked'+(f': {reason}' if reason else '.'),
+        'failed':'The watcher stopped because of a problem'+(f': {reason}' if reason else '.'),
+        'expired':'The watcher ran out of time. Press Start.',
+        'stopped':'Stopped. Press Start to apply your stats.',
+    }
+    text=sentences.get(state,state.replace('_',' ').capitalize())
+    if state in ('applying','waiting_progress') and monitor.get('trace_only'):text='Observe only: reading your character without changing anything.'
+    return text
+
+def parse_target(text,offset,fmt):
+    """Validate a target typed in the window. Raises ValueError for anything the watcher would refuse."""
+    value=float(str(text).replace(',','').strip())
+    if not math.isfinite(value) or not 0<=value<=1e7:raise ValueError('out of range')
+    if offset==28 and not 1<=value<=1e6:raise ValueError('experience must be 1 to 1,000,000')
+    if offset==20 and value!=1.5:raise ValueError('speed is locked')
+    if fmt=='I':
+        if value!=int(value):raise ValueError('whole numbers only')
+        return int(value)
+    return value
+
 class WatcherWindow:
     """Small Tk front end: starts/stops the background watcher and shows its state and live values."""
     COLORS={'in_lobby':'#1565c0','in_menu':'#6b6b6b','applying':'#2e7d32','waiting_progress':'#b26a00','learning':'#1565c0','learned':'#1565c0','seeking_record':'#6b6b6b','blocked':'#c62828','blocked_ambiguous':'#c62828','recovering':'#c62828','waiting_process':'#6b6b6b','stopped':'#6b6b6b','expired':'#6b6b6b','failed':'#c62828'}
@@ -2274,7 +2309,9 @@ class WatcherWindow:
             lab=ttk.Label(box,textvariable=var,font=('Segoe UI',11,'bold'));lab.pack(padx=8,pady=6,anchor='w')
             if col==0:self.state_label=lab
         ttk.Label(root,text="For solo or host runs only. Do not use when joining someone else's game.",foreground='#b26a00').pack(anchor='w',padx=12)
+        self.status=tk.StringVar(value='');ttk.Label(root,textvariable=self.status,wraplength=520,foreground='#444444').pack(anchor='w',padx=16)
         ctl=ttk.Frame(root);ctl.pack(fill='x',**pad)
+        ttk.Button(ctl,text="What's new",command=self.whats_new).pack(side='right')
         ttk.Button(ctl,text='Start',command=self.start).pack(side='left')
         ttk.Button(ctl,text='Stop',command=self.stop).pack(side='left',padx=6)
         self.mode=tk.StringVar(value='write')
@@ -2303,13 +2340,33 @@ class WatcherWindow:
     def build_rows(self):
         ttk=self.ttk;data=read();disabled=set(data.get('gui_disabled',[]))
         for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
-        for row,(name,_,_,value) in enumerate(data['config']['targets'],start=1):
+        for row,(name,offset,fmt,value) in enumerate(data['config']['targets'],start=1):
             var=self.tk.BooleanVar(value=name not in disabled);self.field_vars[name]=var
             ttk.Checkbutton(self.rows,variable=var,command=self.save_fields).grid(row=row,column=0)
             ttk.Label(self.rows,text=name,width=16).grid(row=row,column=1,sticky='w',padx=6)
             live=self.tk.StringVar(value='-');self.live_vars[name]=live
             ttk.Label(self.rows,textvariable=live,width=14).grid(row=row,column=2,sticky='w',padx=6)
-            ttk.Label(self.rows,text=f'{value:g}').grid(row=row,column=3,sticky='w',padx=6)
+            target=self.tk.StringVar(value=f'{value:g}')
+            entry=ttk.Entry(self.rows,textvariable=target,width=11,state='disabled' if offset==20 else 'normal');entry.grid(row=row,column=3,sticky='w',padx=6)
+            for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e,n=name,o=offset,f=fmt,v=target:self.commit_target(n,o,f,v))
+    def commit_target(self,name,offset,fmt,var):
+        current=next((t[3] for t in read()['config']['targets'] if t[0]==name),None)
+        try:value=parse_target(var.get(),offset,fmt)
+        except ValueError as error:
+            self.say(f'{name}: not changed ({error}).');var.set(f'{current:g}');return
+        if value==current:var.set(f'{value:g}');return
+        def save_it(d):
+            for t in d['config']['targets']:
+                if t[0]==name:t[3]=value
+        update_session(save_it);var.set(f'{value:g}');self.say(f'{name} target set to {value:g}.')
+        if auto_alive(read()):self.say('Restarting the watcher to use it...');self.start()
+    def whats_new(self):
+        from tkinter import messagebox
+        try:
+            text=(ROOT/'CHANGELOG.md').read_text(encoding='utf-8');parts=text.split('\n## ')
+            notes='## '+parts[1].strip() if len(parts)>1 else text
+        except OSError:notes='No changelog found.'
+        messagebox.showinfo(f'{APP_NAME} {VERSION}',notes)
     def save_fields(self):
         off=sorted(n for n,v in self.field_vars.items() if not v.get())
         update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
@@ -2354,6 +2411,7 @@ class WatcherWindow:
             data=read();monitor=data.get('auto_monitor',{});alive=auto_alive(data)
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.state.set(state.replace('_',' '));self.state_label.configure(foreground=self.COLORS.get(state,'#000000'))
+            self.status.set(describe_state(monitor if alive else dict(),state))
             self.char.set(f"{monitor.get('character') or 'Detecting character'}, level {monitor['level']}" if monitor.get('level') else '-');self.proc.set(f"PID {monitor['game_pid']}" if monitor.get('game_pid') else '-')
             if state!=self.last_state:self.say('State: '+state+(f" ({monitor.get('reason')})" if monitor.get('reason') else ''));self.last_state=state
             try:values=self.live_values(monitor) if alive else {}
@@ -2554,6 +2612,19 @@ def self_test():
         def test_versions_compare_numerically_and_http_is_refused(self):
             self.assertTrue(parse_version('1.10.0')>parse_version('1.9.9'))
             with self.assertRaises(ValueError):http_get('http://example.com/x',10,1)
+        def test_window_status_is_plain_english(self):
+            self.assertIn('menu',describe_state({},'in_menu').lower())
+            self.assertIn('applied',describe_state({},'applying'))
+            self.assertTrue(describe_state({'trace_only':True},'applying').startswith('Observe only'))
+            self.assertIn('Speed locked',describe_state({'reason':'Speed locked'},'blocked'))
+            self.assertEqual(describe_state({},'something_new'),'Something new')
+        def test_typed_targets_are_validated(self):
+            self.assertEqual(parse_target('9,999',24,'f'),9999.0)
+            self.assertEqual(parse_target('1000.99',28,'f'),1000.99)
+            self.assertEqual(parse_target('9998',68,'I'),9998)
+            for text,offset,fmt in (('abc',24,'f'),('-1',24,'f'),('1e9',24,'f'),('0.5',28,'f'),('2000000',28,'f'),('3',20,'f'),('1.5',52,'I'),('nan',24,'f')):
+                with self.assertRaises(ValueError):parse_target(text,offset,fmt)
+            self.assertEqual(parse_target('1.5',20,'f'),1.5)
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
