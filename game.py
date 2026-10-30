@@ -131,12 +131,44 @@ def learn_deltas(memory,process,header,recipe,name):
             found.append(((d,o),snap))
     return found
 
+def find_characters(memory,process,recipe,cancelled=lambda:False,budget=40.):
+    """Read-only: every character record visible in memory whatever its name (solo: one; host: several)."""
+    import numpy as np,re
+    delta=recipe['stats_offset']-recipe['name_header_offset'];owner=recipe.get('owner_offset',968)
+    span=delta+owner+64;found=[];deadline=time.monotonic()+budget
+    for region in memory.snapshot_memory_regions():
+        if not(region.is_readable and region.is_writable and not region.is_executable):continue
+        for address in range(region.address,region.address+region.size,4194304):
+            if cancelled():raise InterruptedError('Stop requested.')
+            if time.monotonic()>=deadline:return found
+            try:raw=memory.read_bytes(address,min(4194304+span,region.address+region.size-address))
+            except Exception:continue
+            v=np.frombuffer(raw[:len(raw)//8*8],dtype='<u8')
+            if len(v)<3:continue
+            cap,ptr,length=v[:-2],v[1:-1],v[2:]
+            mask=(length>=2)&(length<=24)&(cap>=length)&(cap<=256)&(ptr>=0x10000)&(ptr<0x7ffffffff000)
+            idx=np.flatnonzero(mask);idx=idx[idx*8<4194304]
+            base=idx*8+delta;ok=(base>=24)&(base+owner+24<=len(raw))
+            idx,base=idx[ok],base[ok]
+            u32=np.frombuffer(raw[:len(raw)//4*4],dtype='<u4')
+            keep=(u32[(base+104)//4]>=1)&(u32[(base+104)//4]<=10000)&(u32[(base-24)//4]!=0)
+            for i,b in zip(idx[keep],base[keep]):
+                b=int(b)
+                if not layout_prefilter(raw,b):continue
+                try:text=memory.read_bytes(int(ptr[i]),int(length[i])).decode('utf-8')
+                except Exception:continue
+                if not re.fullmatch(r"[^\W\d_][\w' -]*",text):continue
+                try:found.append(actor_snapshot(memory,process,address+b,recipe,text))
+                except Exception:continue
+    return found
+
 class AutoBackend:
     """Live access adapter. Discovery is incremental, cancellable and read-only."""
     def __init__(self,data,signal):
         self.data=data;self.signal=signal;self.process=None;self.memory=None;self.generation=None
-        self.recipe=dict(data.get('native_identity_recipe',{}));self.name=self.recipe.get('name')
-        if not self.name or self.name.startswith('<'):raise AutoBlocked('Character name not set; run: python game.py setup')
+        self.recipe=dict(data.get('native_identity_recipe',{}));self.name=data.get('last_name') or self.recipe.get('name')
+        if not self.name or self.name.startswith('<'):self.name=None  # automatic: detected from memory
+        self.detect_next=0;self.ambiguous_names=None
         if self.recipe.get('build','').lower()!=data['game_sha256'].lower():raise AutoBlocked('Identity recipe/build mismatch.')
         targets=[t for t in data['config']['targets'] if t[1] in AUTO_CORE_OFFSETS]
         if len(targets)!=len(AUTO_CORE_OFFSETS) or {t[1] for t in targets}!=AUTO_CORE_OFFSETS:
@@ -197,6 +229,9 @@ class AutoBackend:
         recipe['targets']=self.targets;self.recipe=recipe
     def learn(self,now):
         """Read-only: find the name->stats distance for an unseen build, confirm over >=3 spaced samples."""
+        if self.name is None:
+            self.detect_character(now)
+            if self.name is None:return dict(state='learning',phase='need_name',names=self.ambiguous_names)
         if now<self.next_learn:return dict(state='learning',samples=len(self.learn_samples))
         self.next_learn=now+5
         if self.learn_headers is None:
@@ -276,7 +311,28 @@ class AutoBackend:
     def at(self,base):
         # Discovery never gets the relaxed health rule for an unknown identity.
         return actor_snapshot(self.memory,self.process,base,self.recipe,self.name)
+    def detect_character(self,now):
+        """No usable name yet (or it was not found): look for any valid character record and adopt its name."""
+        if now<self.detect_next:return []
+        self.detect_next=now+30
+        recipe=dict(self.recipe,targets=self.targets)
+        found=find_characters(self.memory,self.process,recipe,cancelled=lambda:self.signal.wait(0))
+        names=sorted({c['name'] for c in found})
+        if not names:self.ambiguous_names=None;return []
+        chosen=names[0] if len(names)==1 else None
+        if chosen is None:
+            try:chosen=window_player_name(self.process.pid,names)
+            except Exception:chosen=None
+        if chosen is None:self.ambiguous_names=names;return []
+        self.ambiguous_names=None;self.name=chosen
+        def remember(current):
+            current['last_name']=chosen;known=current.setdefault('known_names',[])
+            if chosen not in known:known.append(chosen)
+        update_session(remember)
+        mine=[c for c in found if c['name']==chosen];self.hints.update(c['base'] for c in mine)
+        return mine
     def seek(self,now):
+        if self.name is None:return self.detect_character(now)
         found={}
         for base in sorted(self.hints):
             if self.signal.wait(0):raise InterruptedError('Stop requested.')
@@ -319,7 +375,8 @@ class AutoBackend:
             self.offset+=length
             if self.offset>=r.size:self.region_index+=1;self.offset=0
         if self.region_index>=len(self.regions):self.scan_complete=True;self.scan_restart=now+10
-        return list(self.scan_found.values())
+        found=list(self.scan_found.values())
+        return found or (self.detect_character(now) if self.scan_complete else [])
     def run_reset(self):
         self.injected.clear();self.backed_up.clear()
     def apply(self,candidate):
@@ -389,7 +446,9 @@ class AutoRecovery:
                     picked=self.pick_live(candidates)
                     if picked is not None:candidates=[picked]
                 if len(candidates)!=1:
-                    self.state=dict(state='blocked_ambiguous' if candidates else 'seeking_record',candidates=len(candidates));return self.state
+                    self.state=dict(state='blocked_ambiguous' if candidates or getattr(self.backend,'ambiguous_names',None) else 'seeking_record',candidates=len(candidates))
+                    if getattr(self.backend,'ambiguous_names',None):self.state['names']=self.backend.ambiguous_names
+                    return self.state
                 self.candidate=candidates[0];self.last_level=self.candidate['level'];self.baseline=self.last_level
                 self.last_values=dict(self.candidate.get('values',{}))
                 self.confirmations=1;self.last_progress=now;self.state=dict(state='waiting_progress',level=self.last_level);return self.state
@@ -491,7 +550,7 @@ def auto_command():
                 if state.get('state')!=last_state:
                     print(json.dumps(state),flush=True);last_state=state.get('state')
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
-                    runtime.update(state);runtime['reason']=state.get('reason');runtime.update(heartbeat=time.time(),game_pid=engine.generation[0] if engine.generation else None,
+                    runtime.update(state);runtime['reason']=state.get('reason');runtime['character']=backend.name;runtime.update(heartbeat=time.time(),game_pid=engine.generation[0] if engine.generation else None,
                         game_created=engine.generation[1] if engine.generation else None,scan_bytes=backend.scan_bytes,
                         scan_errors=backend.scan_errors,missing_source_kinds=backend.missing_sources)
                     def publish(current):
@@ -2045,6 +2104,19 @@ def pick_cards(pid,note,max_rerolls=8,wait=6.):
         picks+=1;rerolls=0;deadline=time.monotonic()+2.5
     note(f'Level-up cards: done ({picks} pick(s)).')
 
+def window_player_name(pid,names):
+    """Which of several names is yours? The player frame (top-left of the screen) lists you first."""
+    import tempfile
+    handle=game_window(pid)
+    if not handle:return None
+    path=Path(tempfile.gettempdir())/'azeroth_name.png'
+    width,height=capture_window(handle,path)
+    lines=sorted((y1,t) for x1,y1,x2,y2,t in ocr_lines(path) if x1<width*.3 and y1<height*.25)
+    for _,text in lines:
+        for name in names:
+            if fuzzy_in(text.lower(),name.lower()):return name
+    return None
+
 def cards_test():
     """Dry run: capture the game window, read the popup and say what would be chosen. Presses nothing."""
     data=read();matches=[p for p in psutil.process_iter(['exe']) if p.info['exe'] and os.path.normcase(p.info['exe'])==os.path.normcase(data['game_exe'])]
@@ -2059,32 +2131,32 @@ def configure(game_exe,name):
     """Create or update session.json for this machine: game path and character name."""
     exe=Path(game_exe)
     if not exe.is_file():raise RuntimeError(f'Game executable not found: {exe}')
-    if not name or not name.strip() or len(name.strip().encode('utf-8'))>64:raise ValueError('Character name must be 1..64 bytes.')
+    name=(name or '').strip() or '<auto>'
+    if len(name.encode('utf-8'))>64:raise ValueError('Character name must be at most 64 bytes.')
     if SESSION.exists():data=read()
     else:
         example=ROOT/'profile.example.json'
         if not example.exists():raise RuntimeError('profile.example.json is missing; re-download the project.')
         data=json.loads(example.read_text(encoding='utf-8'))
-    data['game_exe']=str(exe);data.setdefault('native_identity_recipe',{})['name']=name.strip()
-    save(data);return data
+    data['game_exe']=str(exe);data.setdefault('native_identity_recipe',{})['name']=name
+    data.pop('last_name',None);save(data);return data
 
 def configured():
     try:
         data=read()
-        recipe_name=data.get('native_identity_recipe',{}).get('name','')
-        return Path(data.get('game_exe','')).is_file() and bool(recipe_name) and not recipe_name.startswith('<')
+        return Path(data.get('game_exe','')).is_file()
     except (OSError,ValueError):return False
 
 def ensure_configured():
     if not configured():
-        raise RuntimeError('Not configured yet. Run: python game.py setup --game "C:\\path\\to\\AzerothSurvivors.exe" --name YourCharacter   (or just open the window: python game.py)')
+        raise RuntimeError('Not configured yet. Run: python game.py setup --game "C:\\path\\to\\AzerothSurvivors.exe" [--name YourCharacter]   (or just open the window: python game.py)')
 
 def setup_command():
     parser=argparse.ArgumentParser(description='First-time setup: where the game is and which character to manage.')
     parser.add_argument('--game',required=True,help='Full path to AzerothSurvivors.exe')
-    parser.add_argument('--name',required=True,help='Character name exactly as shown in game')
+    parser.add_argument('--name',default='',help='Character name exactly as shown in game; leave out to detect it automatically')
     args=parser.parse_args(sys.argv[2:]);configure(args.game,args.name)
-    print(f'{APP_NAME} configured for "{args.name}". Open the window with: python game.py')
+    print(f'{APP_NAME} configured for '+(f'"{args.name}"' if args.name else 'automatic character detection')+'. Open the window with: python game.py')
 
 def effective_targets(data,digest):
     """(name, offset, fmt, value) the watcher uses for this build; unverified fields are left out."""
@@ -2189,7 +2261,7 @@ class WatcherWindow:
             data=read();monitor=data.get('auto_monitor',{});alive=auto_alive(data)
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.state.set(state.replace('_',' '));self.state_label.configure(foreground=self.COLORS.get(state,'#000000'))
-            self.char.set(f"{data.get('native_identity_recipe',{}).get('name','Character')}, level {monitor['level']}" if monitor.get('level') else '-');self.proc.set(f"PID {monitor['game_pid']}" if monitor.get('game_pid') else '-')
+            self.char.set(f"{monitor.get('character') or 'Detecting character'}, level {monitor['level']}" if monitor.get('level') else '-');self.proc.set(f"PID {monitor['game_pid']}" if monitor.get('game_pid') else '-')
             seen=getattr(self,'cards_seen',len(data.get('card_log',[])));entries=data.get('card_log',[])
             for entry in entries[seen:]:self.say(entry['text'])
             self.cards_seen=len(entries)
@@ -2217,8 +2289,8 @@ def gui():
             from tkinter import filedialog,messagebox,simpledialog
             root.withdraw();messagebox.showinfo(APP_NAME,'First run: choose AzerothSurvivors.exe, then enter your character name.')
             path=filedialog.askopenfilename(title='Select AzerothSurvivors.exe',filetypes=[('Game executable','*.exe')])
-            name=simpledialog.askstring(APP_NAME,'Character name (exactly as shown in game):') if path else None
-            if not path or not name:return
+            name=simpledialog.askstring(APP_NAME,'Character name exactly as shown in game (leave blank to detect it automatically):') if path else None
+            if not path:return
             configure(path,name);root.deiconify()
         WatcherWindow(root);root.mainloop()
     except Exception:
@@ -2333,6 +2405,19 @@ def self_test():
             info=parse_cards(lines,2000,1360)
             self.assertTrue(info['active']);self.assertEqual(len(info['columns']),4);self.assertIn('consecration',info['columns'][1]['text'].lower())
             self.assertFalse(parse_cards([l for l in lines if l[4]!='LEVEL UP!' and not l[4].startswith('Choose')],2000,1360)['active'])
+        def test_character_detected_without_a_configured_name(self):
+            memory,proc,header,recipe,name=self.layout_fixture(d=792,o=968)
+            class Region:
+                address=0x100000;size=0x20000;is_readable=True;is_writable=True;is_executable=False
+            memory.snapshot_memory_regions=lambda:[Region()]
+            found=find_characters(memory,proc,dict(recipe,owner_offset=968))
+            self.assertEqual([(c['name'],c['player_id']) for c in found],[('Nelbin',777)])
+        def test_character_detection_ignores_non_characters(self):
+            memory,proc,header,recipe,name=self.layout_fixture(d=900,o=968)  # stats where the recipe does not expect them
+            class Region:
+                address=0x100000;size=0x20000;is_readable=True;is_writable=True;is_executable=False
+            memory.snapshot_memory_regions=lambda:[Region()]
+            self.assertEqual(find_characters(memory,proc,dict(recipe,owner_offset=968)),[])
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
