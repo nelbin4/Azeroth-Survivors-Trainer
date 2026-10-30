@@ -177,6 +177,5 @@
       "wallet_confirmed": true,
       "wallet_evidence": "user-reported 125, ~30, 400+ matched monotonic +124 log; +904 mirrors it"
     }
-  },
-  "cards_enabled": true
+  }
 }

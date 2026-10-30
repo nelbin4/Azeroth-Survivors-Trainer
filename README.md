@@ -1,6 +1,6 @@
 # Azeroth Survivors Trainer
 
-A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game, and can pick level-up cards for you from a priority list. It has a small window, a silent background mode, and a command line.
+A Windows trainer for the free fan game **Azeroth Survivors**. It finds your character in the game's memory, applies the stat values you choose without pausing or hooking the game,. It has a small window, a silent background mode, and a command line.
 
 ## Install
 
@@ -37,14 +37,13 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 - **Stat trainer.** Keeps max/current HP, damage, crit, crit damage, speed, XP, regeneration, luck, gold and more at your targets. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups.
 - **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only.
 - **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
-- **Level-up card picker (experimental).** Reads the popup from a background window capture with Windows' built-in text recognition, picks by your priority list, and presses the card's number key (the game's own hotkeys: 1–3 or 1–4). It never rerolls and never skips. It reads the popup in a fraction of a second. Nothing is shown on or moved on your screen.
 - **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
 
 ## Updates
 
 At startup (the window, or `--background`) the trainer checks GitHub for a newer version, downloads it, checks that the new code compiles, replaces the program files, and restarts itself. This takes a couple of seconds and is skipped silently when you are offline.
 
-- **What is replaced:** `game.py`, the docs, `profile.example.json`, `requirements.txt`. Your `session.json`, saves and **your edited `card_priorities.json` are never touched** (delete that file to get new default priorities). Replaced files are backed up in `.update_backup/<old version>/`.
+- **What is replaced:** `game.py`, the docs, `profile.example.json`, `requirements.txt`. Your `session.json` and saves are never touched. Replaced files are backed up in `.update_backup/<old version>/`.
 - **Git checkouts** (developers) only fast-forward when you have no uncommitted changes.
 - **Trust:** updates come over HTTPS from this repository's `main` branch. Switch it off with the window's *Check GitHub for updates* box, or `"auto_update": false` in `session.json`, or start with `--no-update`.
 - If an update adds a new dependency, run `pip install -r requirements.txt` after it.
@@ -57,29 +56,16 @@ At startup (the window, or `--background`) the trainer checks GitHub for a newer
 | `python game.py --background` | Starts the watcher silently, with no window. |
 | `python game.py status` | Prints the watcher's current state as JSON. |
 | `python game.py stop` | Stops any running watcher. |
-| `python game.py cards-test` | Dry run: reads a level-up popup and says what it would pick. Presses nothing. |
 | `python game.py relayout --hp 807 --damage 104 ...` | Learns moved stat offsets after a game update, from the values on your character sheet (read-only). |
 | `python game.py find-wallet --gold 1234` | Learns the gold counter's location from an exact gold amount (read-only). |
 | `python game.py self-test` | Runs the built-in test suite. |
 | `python game.py --version` | Shows the version. |
 
-In the window you can switch **Observe only / Write**, **Start / Stop**, include or exclude each stat, and toggle the card picker. Closing the window leaves the watcher running; press **Stop** to end it.
-
-### Level-up card priorities (per class)
-
-Priorities live in [`card_priorities.json`](card_priorities.json), one list per class. Edit it freely; the trainer reads it for every popup.
-
-- **`spells`** — new-spell cards, best first. Ships with a Paladin list (Consecration, Redemption, Holy Wrath, Holy Shock, Hammer of Justice, Divine Shield) and a Hunter list (Volley, Explosive Trap, Aimed Shot, Immolation Trap; any other Hunter spell is not ranked, so the rarest card is taken).
-- **`upgrades`** — keywords for upgrade cards ("Improves a spell you know"), best first: area, cooldown, luck by default. A larger percentage wins a tie.
-- **`known`** — extra spell names used only to recognise the class.
-- **Class choice:** `auto` recognises the class from the spell names on the popup. Or pick one in the window's **Card class** box.
-- **Best-spell upgrades (smart pick):** during a run it reads the in-game *Damage Done* panel (every 20 s) to rank your spells (and item procs such as set bonuses) by damage. On upgrade popups it takes the card for your highest-ranked spell that is offered, using the upgrade keywords above to choose among that spell's cards. New-spell popups still follow the class spell list, since an unowned spell has no damage yet. Switch it off with the window's checkbox (`meter_enabled`). `python game.py meter-test` shows the ranking it reads.
-- If nothing on the list is offered, it takes the rarest card (legendary, then epic, then rare). It never rerolls and never skips.
-- Other classes: add a block to the JSON (copy the Hunter one). A class without a list falls back to the rarest card for spell popups and the shared upgrade keywords.
+In the window you can switch **Observe only / Write**, **Start / Stop**, and include or exclude each stat. Closing the window leaves the watcher running; press **Stop** to end it.
 
 ## What it looks at on screen
 
-The trainer never records your screen. It reads text from the **game's own window** (a background capture, nothing visible, no cursor or focus change), converts it to text with Windows' built-in recognition on your PC, and deletes the image immediately. Nothing is uploaded. It does this only: every ~10 s while no run is active (to show *in menu* / *in lobby*), after a level-up (to read the cards), and every 20 s during a run if the damage-meter option is on.
+The trainer never records your screen. Only while **no run is active** it reads text from the **game's own window** about every 10 seconds (a background capture: nothing visible, no cursor or focus change) so the state can say *in menu* or *in lobby*. In a hosted game with several players it also reads your player frame once to tell which character is yours. The text is recognised by Windows' built-in recognition on your PC and the image is deleted immediately. Nothing is uploaded, and nothing is captured while a run is going.
 
 ## How it stays safe
 
@@ -96,7 +82,6 @@ The trainer never records your screen. It reads text from the **game's own windo
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Target values live in `session.json` (`config.targets`); a displayed `+N%` is the multiplier `1 + N/100` (for example +200% experience = 3.0). Speed is locked at +50%; experience may be set from 1 to 1,000,000. Extreme values can make the game misbehave (for example many level-ups per second).
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
-- The card picker is new. Validate it with `cards-test` before relying on it, and report what the popup looks like if it misreads.
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.
 
 ## Troubleshooting
@@ -112,7 +97,7 @@ The trainer never records your screen. It reads text from the **game's own windo
 ## Development
 
 ```bash
-python game.py self-test    # 52 tests, no game required
+python game.py self-test    # 41 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.

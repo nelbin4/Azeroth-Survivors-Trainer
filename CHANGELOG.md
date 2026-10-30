@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0 — 2026-10-31
+
+- Removed the automatic level-up card picking and everything built around it (damage-meter ranking, per-class card priorities, class and meter options). The trainer is now only the stat trainer plus the *in menu / in lobby* state. Screen reading is limited to the times no run is active.
+
 ## 1.1.0 — 2026-10-31
 
 - Automatic updates: at startup it checks GitHub, downloads and verifies the new version, installs it (keeping your settings and edited card priorities) and restarts. Can be switched off in the window.

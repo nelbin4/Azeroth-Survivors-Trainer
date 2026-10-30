@@ -19,10 +19,10 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
-UPDATE_FILES = ('game.py', 'card_priorities.json', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
-USER_FILES = ('card_priorities.json',)  # edited by users: an update never overwrites an existing copy
+UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
+USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
 ROOT = Path(__file__).resolve().parent
 SESSION = ROOT / 'session.json'
 CHECKED_BUILDS = set()
@@ -554,13 +554,7 @@ def auto_command():
         data=read();backend=None
         runtime=dict(pid=os.getpid(),created=psutil.Process().create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only,pauses=False)
         update_session(lambda current:current.update(auto_monitor=runtime))
-        deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;last_identity=None;card_level=[None];picking=[False]
-        if not args.trace_only:threading.Thread(target=lambda:ocr_server(),daemon=True).start()
-        meter_next=[0.]
-        def card_note(text):
-            def add(current):
-                log=current.setdefault('card_log',[]);log.append(dict(time=time.time(),text=text));current['card_log']=log[-30:]
-            update_session(add)
+        deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;last_identity=None
         try:
             backend=AutoBackend(data,signal)
             if args.trace_only:
@@ -568,19 +562,6 @@ def auto_command():
             engine=AutoRecovery(backend)
             while time.monotonic()<deadline and not signal.wait(0):
                 state=engine.step()
-                level_now=state.get('level')
-                if level_now is not None and engine.generation:
-                    if card_level[0] is not None and level_now>card_level[0] and not picking[0] and not args.trace_only and read().get('cards_enabled',True):
-                        picking[0]=True
-                        def card_job(pid=engine.generation[0]):
-                            try:pick_cards(pid,card_note)
-                            except Exception as error:card_note(f'Level-up cards failed: {error}')
-                            finally:picking[0]=False
-                        threading.Thread(target=card_job,daemon=True).start()
-                    card_level[0]=level_now
-                    if not args.trace_only and time.monotonic()>=meter_next[0] and read().get('meter_enabled',True):
-                        meter_next[0]=time.monotonic()+20
-                        threading.Thread(target=lambda pid=engine.generation[0]:sample_meter(pid),daemon=True).start()
                 if state.get('state')!=last_state:
                     print(json.dumps(state),flush=True);last_state=state.get('state')
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
@@ -1993,8 +1974,6 @@ def find_wallet():
     update_session(lambda current:current.setdefault('learned_builds',{}).setdefault(digest,{}).update(wallet_offset=offset))
     print(json.dumps(dict(build=digest,wallet_offset=offset,stat_writes=False),indent=2))
 
-CARD_SPELLS = ('consecration', 'redemption', 'holy wrath', 'holy shock', 'hammer of justice', 'divine shield')
-CARD_UPGRADES = ('area', 'cooldown', 'luck')
 OCR_SCRIPT = r"""param([string]$Path)
 [Console]::OutputEncoding=[System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -2135,216 +2114,12 @@ def ocr_lines(path):
         capture_output=True,creationflags=subprocess.CREATE_NO_WINDOW,timeout=30)
     return parse_ocr_rows(run.stdout.decode('utf-8',errors='replace').splitlines())
 
-def parse_cards(lines,width,height):
-    """Group OCR lines into card columns. A popup is active only if the header area says Level Up."""
-    header=' '.join(t for x1,y1,x2,y2,t in lines if y1<height*.45).lower()
-    active='level up' in header or 'choose a' in header or 'choose an' in header
-    body=sorted(((x1+x2)/2,y1,t) for x1,y1,x2,y2,t in lines if height*.5<=y1<=height*.88)
-    columns=[]
-    for cx,y,text in body:
-        if columns and cx-columns[-1]['cx']<width*.07:
-            columns[-1]['texts'].append(text);columns[-1]['cx']=(columns[-1]['cx']+cx)/2
-        else:columns.append(dict(cx=cx,texts=[text]))
-    return dict(active=active,columns=[dict(x=c['cx'],text=' '.join(c['texts'])) for c in columns if len(c['texts'])>=3])
-
 def fuzzy_in(text,name):
     import difflib
     text=text.lower().replace('-',' ').replace("'",'');name=name.lower().replace('-',' ').replace("'",'')
     if name in text:return True
     words=text.split();size=len(name.split())
     return any(difflib.SequenceMatcher(None,' '.join(words[i:i+size]),name).ratio()>=.82 for i in range(max(1,len(words)-size+1)))
-
-def load_card_config():
-    """Per-class card priorities from card_priorities.json; falls back to the built-in Paladin defaults."""
-    try:
-        data=json.loads((ROOT/'card_priorities.json').read_text(encoding='utf-8'))
-        if isinstance(data.get('classes'),dict):return data
-    except (OSError,ValueError):pass
-    return dict(upgrades=list(CARD_UPGRADES),classes=dict(Paladin=dict(spells=list(CARD_SPELLS),known=[])))
-
-def detect_card_class(texts,config):
-    """Which class is this? The class whose spell names appear on the most cards."""
-    best=None
-    for name,spec in config.get('classes',{}).items():
-        vocabulary=list(spec.get('spells',[]))+list(spec.get('known',[]))
-        hits=sum(any(fuzzy_in(t,v) for v in vocabulary) for t in texts)
-        if hits and (best is None or hits>best[0]):best=(hits,name)
-    return best[1] if best else None
-
-def choose_card(texts,spells=CARD_SPELLS,upgrades=CARD_UPGRADES):
-    """Returns dict(index, mode, rank) or None when no card is on the priority lists."""
-    import re
-    texts=[t.lower() for t in texts]
-    if any('new spell' in t for t in texts):
-        ranked=[(next((r for r,name in enumerate(spells) if fuzzy_in(t,name)),None),i) for i,t in enumerate(texts)]
-        ranked=[(r,i) for r,i in ranked if r is not None]
-        if not ranked:return None
-        r,i=min(ranked);return dict(index=i,mode='spell',rank=spells[r])
-    best=None
-    for i,t in enumerate(texts):
-        hits=[(upgrades.index(m.group(2)),-abs(int(m.group(1)))) for m in re.finditer(r'([+-]?\d+)\s*%\s*(?:more\s*)?('+'|'.join(re.escape(k) for k in upgrades)+')',t)]
-        if not hits:hits=[(upgrades.index(k),0) for k in upgrades if re.search(r'\b'+re.escape(k),t)]
-        if hits:
-            key=(min(hits),i)
-            if best is None or key<best:best=key
-    return None if best is None else dict(index=best[1],mode='upgrade',rank=upgrades[best[0][0]])
-
-_CLASS=[None]
-
-def choose_for_class(texts,config,setting='auto'):
-    """Choice using the priorities of the selected class, or of the class recognised from the popup."""
-    cls=setting if setting not in (None,'','auto') else (detect_card_class(texts,config) or _CLASS[0])
-    if cls in config.get('classes',{}):_CLASS[0]=cls
-    spec=config.get('classes',{}).get(cls,{})
-    choice=choose_card(texts,spec.get('spells',[]),spec.get('upgrades') or config.get('upgrades') or list(CARD_UPGRADES))
-    return cls,choice
-
-_METER=dict(ranking=[],time=0.)
-
-def clean_row_name(text,vocabulary=()):
-    """'4 1. voile' -> 'volley': keep the words after the last dot, then snap to a known spell name if close."""
-    import difflib,re
-    name=re.sub(r'[^A-Za-z\' -]','',text.split('.')[-1]).strip()
-    if vocabulary:
-        close=difflib.get_close_matches(name.lower(),[v.lower() for v in vocabulary],n=1,cutoff=.6)
-        if close:return close[0]
-    return name
-
-def parse_damage_rows(lines,width,height):
-    """From OCR lines (full-window coordinates) of the Damage Done panel: (named rows, unnamed number rows)."""
-    import re
-    header=next((l for l in lines if re.search(r'damage\s*done',l[4],re.I)),None)
-    if header is None:return None
-    left=header[0];named=[];numbers=[]
-    for x1,y1,x2,y2,text in sorted(lines,key=lambda l:l[1]):
-        if y1<=header[1]+4 or y1>header[1]+height*.2:continue
-        match=re.match(r'^\s*(\d+)\s*[._,]?\s*(.+)$',text)
-        if abs(x1-left)<=width*.04 and match and len(match.group(2))>=3:named.append((int(match.group(1)),match.group(2).strip(),y1))
-        elif x1>left+width*.05 and re.search(r'\d',text):numbers.append((y1,text))
-    return dict(header=header,named=named,numbers=numbers)
-
-def read_damage_done(handle,vocabulary=()):
-    """Our spells (and item procs) ranked by damage, from the Damage Done panel at the bottom right.
-    Row 1 is small and dim, so it is re-read from an enlarged crop."""
-    from PIL import Image,ImageOps
-    path=shot_path('dmg');width,height=capture_window(handle,path,.5,1.,.6,1.)
-    x_off,y_off=int(.6*width),int(.5*height)
-    image=Image.open(path).convert('RGB');image.load()
-    lines=[(x1+x_off,y1+y_off,x2+x_off,y2+y_off,t) for x1,y1,x2,y2,t in ocr_lines(path)]
-    panel=parse_damage_rows(lines,width,height)
-    if panel is None:return None
-    ranking={rank:clean_row_name(name,vocabulary) for rank,name,_ in panel['named']}
-    if 1 not in ranking and panel['named'] and panel['numbers']:
-        first_y=min(y for _,_,y in panel['named'])
-        above=[y for y,_ in panel['numbers'] if y<first_y-5]
-        if above:
-            y=min(above)-y_off;x=panel['header'][0]-x_off
-            for pad in (0,6):
-                box=(max(0,x-6-pad),max(0,y-9),x+int(width*.085)+pad,y+19)
-                crop=image.crop(box);crop=crop.resize((crop.width*4,crop.height*4),Image.LANCZOS)
-                for variant in (crop,ImageOps.autocontrast(ImageOps.grayscale(crop)).convert('RGB')):
-                    temporary=shot_path('row1');variant.save(temporary,'BMP')
-                    text=' '.join(t for *_,t in ocr_lines(temporary));name=clean_row_name(text,vocabulary)
-                    if len(name)>=4:ranking[1]=name;break
-                if 1 in ranking:break
-    ordered=[ranking[r] for r in sorted(ranking)]
-    return dict(ranking=ordered) if ordered else None
-
-def meter_vocabulary():
-    config=load_card_config()
-    return [v for spec in config.get('classes',{}).values() for v in list(spec.get('spells',[]))+list(spec.get('known',[]))]
-
-def sample_meter(pid,name=None):
-    """One background look at the damage meter; remembers our spell ranking for the card picker."""
-    handle=game_window(pid)
-    if not handle:return None
-    found=read_damage_done(handle,meter_vocabulary())
-    if found:_METER.update(ranking=found['ranking'],time=time.monotonic())
-    return found
-
-def meter_ranking(max_age=180.):
-    return list(_METER['ranking']) if _METER['ranking'] and time.monotonic()-_METER['time']<=max_age else []
-
-def card_spell(text):
-    """The spell an upgrade card improves: the words before 'Rank n » m'."""
-    import re
-    head=re.split(r'\brank\b',text,flags=re.I)[0]
-    return re.sub(r'^(?:spells\s+)?(?:[+\-\d%\s]*)','',head.strip(),flags=re.I).strip()
-
-def choose_for_ranking(texts,ranking,upgrades):
-    """Upgrade popups: take a card for our highest-ranked spell that is offered, then the keyword priority among its cards."""
-    if not ranking or any('new spell' in t.lower() for t in texts):return None
-    for position,name in enumerate(ranking,1):
-        mine=[i for i,t in enumerate(texts) if fuzzy_in(t,name)]
-        if mine:
-            pick=choose_card([texts[i] for i in mine],upgrades=upgrades)
-            return dict(index=mine[pick['index']] if pick else mine[0],mode='upgrade',rank=(pick['rank'] if pick else 'upgrade')+f' on {name} (#{position})')
-    return None
-
-def fallback_card(texts):
-    """Nothing on the priority lists: take the rarest card offered (never skip, never reroll); ties go to the first."""
-    rarity=('legendary','epic','rare','uncommon')
-    def score(text):
-        text=text.lower()
-        return next((len(rarity)-i for i,name in enumerate(rarity) if name in text),0)
-    return max(range(len(texts)),key=lambda i:(score(texts[i]),-i))
-
-def press_key(handle,virtual_key):
-    user=ctypes.WinDLL('user32',use_last_error=True);user.PostMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
-    scan=user.MapVirtualKeyW(virtual_key,0)
-    user.PostMessageW(handle,0x100,virtual_key,1|(scan<<16));time.sleep(.06)
-    user.PostMessageW(handle,0x101,virtual_key,1|(scan<<16)|(1<<30)|(1<<31))
-
-def click_window(handle,x,y):
-    user=ctypes.WinDLL('user32',use_last_error=True);user.PostMessageW.argtypes=[ctypes.c_void_p,ctypes.c_uint,ctypes.c_size_t,ctypes.c_ssize_t]
-    position=(int(y)<<16)|int(x)
-    user.PostMessageW(handle,0x200,0,position);user.PostMessageW(handle,0x201,1,position);time.sleep(.06);user.PostMessageW(handle,0x202,0,position)
-
-def look(handle,top=0.,bottom=1.):
-    """Capture (optionally only a vertical band) and read the text; coordinates are returned in full-window terms."""
-    import tempfile
-    path=shot_path('cards')
-    width,height=capture_window(handle,path,top,bottom);shift=int(top*height)
-    lines=[(x1,y1+shift,x2,y2+shift,t) for x1,y1,x2,y2,t in ocr_lines(path)]
-    return parse_cards(lines,width,height),width,height
-
-def popup_open(handle):
-    """Fast check: is the Level Up header on screen? Reads only a thin band at the top of the popup."""
-    import tempfile
-    path=shot_path('header')
-    width,height=capture_window(handle,path,.2,.45)
-    return 'level up' in ' '.join(t for *_,t in ocr_lines(path)).lower()
-
-def pick_cards(pid,note,wait=4.):
-    """After a level-up: wait for the popup, read the cards, choose by priority and press the number key. Never rerolls or skips."""
-    handle=game_window(pid)
-    if not handle:note('Level-up cards: game window not found.');return
-    start=time.monotonic();end_wait=start+wait;picks=0
-    while picks<6 and time.monotonic()-start<60:
-        if not popup_open(handle):
-            if time.monotonic()>end_wait:break
-            continue  # the recognizer itself paces this loop; no fixed sleeps
-        seen=time.monotonic()
-        info,width,height=look(handle,.45,.9)
-        if len(info['columns'])<2:continue  # cards still animating in
-        texts=[c['text'] for c in info['columns']];cls,choice=choose_for_class(texts,load_card_config(),read().get('card_class','auto'))
-        spec=load_card_config().get('classes',{}).get(cls,{})
-        if read().get('meter_enabled',True):
-            smart=choose_for_ranking(texts,meter_ranking(),spec.get('upgrades') or load_card_config().get('upgrades') or list(CARD_UPGRADES))
-            if smart:choice=smart
-        if choice is None:choice=dict(index=fallback_card(texts),mode='fallback',rank='rarest card')
-        index=choice['index'];press_key(handle,0x31+index);how='key';reaction=time.monotonic()-seen
-        closed=False
-        for attempt in range(2):
-            deadline=time.monotonic()+3.5  # the game's own close animation takes about 2 s
-            while time.monotonic()<deadline:
-                if not popup_open(handle):closed=True;break
-            if closed:break
-            if attempt==0:click_window(handle,info['columns'][index]['x'],height*.6);how='click'
-        note(f"Level-up cards: chose #{index+1} ({cls or 'class unknown'} {choice['mode']}: {choice['rank']}) by {how}, {reaction:.2f}s after the popup was seen"+('.' if closed else '; popup still open.'))
-        if not closed:break
-        picks+=1;end_wait=time.monotonic()+.8  # another popup may follow a multi-level gain
-    note(f'Level-up cards: done ({picks} pick(s)).')
 
 def window_player_name(pid,names):
     """Which of several names is yours? The player frame (top-left of the screen) lists you first."""
@@ -2368,25 +2143,6 @@ def detect_scene(lines,width,height):
     if re.search(r'\blobby\b|waiting for (?:the )?(?:host|players?)|\binvite (?:code|link)|party members',text):return 'lobby'
     if sum(word in text for word in ('collection','drop tables','codex','talents','achievements','armory','rewards'))>=3:return 'menu'
     return 'unknown'
-
-def meter_test():
-    """Read-only: show our spell ranking as the Damage Done panel lists it right now."""
-    data=read();matches=[p for p in psutil.process_iter(['exe']) if p.info['exe'] and os.path.normcase(p.info['exe'])==os.path.normcase(data['game_exe'])]
-    if len(matches)!=1:raise RuntimeError('Game process not found.')
-    handle=game_window(matches[0].pid)
-    if not handle:raise RuntimeError('Game window not found.')
-    found=read_damage_done(handle,meter_vocabulary())
-    print(json.dumps(dict(meter_visible=found is not None,ranking=found['ranking'] if found else [],keys_sent=False),indent=2))
-
-def cards_test():
-    """Dry run: capture the game window, read the popup and say what would be chosen. Presses nothing."""
-    data=read();matches=[p for p in psutil.process_iter(['exe']) if p.info['exe'] and os.path.normcase(p.info['exe'])==os.path.normcase(data['game_exe'])]
-    if len(matches)!=1:raise RuntimeError('Game process not found.')
-    handle=game_window(matches[0].pid)
-    if not handle:raise RuntimeError('Game window not found.')
-    info,_,_=look(handle)
-    print(json.dumps(dict(popup_active=info['active'],cards=[c['text'][:90] for c in info['columns']],
-        decision=(lambda r:dict(class_=r[0],choice=r[1]))(choose_for_class([c['text'] for c in info['columns']],load_card_config(),read().get('card_class','auto'))) if info['active'] else None,keys_sent=False),indent=2))
 
 def parse_version(text):
     return tuple(int(part) for part in text.strip().split('.'))
@@ -2520,17 +2276,8 @@ class WatcherWindow:
         ttk.Label(ctl,text='Mode').pack(side='left',padx=(24,6))
         ttk.Radiobutton(ctl,text='Observe only',variable=self.mode,value='observe').pack(side='left')
         ttk.Radiobutton(ctl,text='Write',variable=self.mode,value='write').pack(side='left',padx=6)
-        self.cards=tk.BooleanVar(value=read().get('cards_enabled',True))
-        ttk.Checkbutton(root,text='Auto-pick level-up cards (priority list)',variable=self.cards,command=lambda:update_session(lambda d:d.update(cards_enabled=bool(self.cards.get())))).pack(anchor='w',padx=12)
         self.updates=tk.BooleanVar(value=read().get('auto_update',True))
         ttk.Checkbutton(root,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w',padx=12)
-        self.meter=tk.BooleanVar(value=read().get('meter_enabled',True))
-        ttk.Checkbutton(root,text='Prefer upgrades for my best spell (reads the damage meter every 20 s)',variable=self.meter,command=lambda:update_session(lambda d:d.update(meter_enabled=bool(self.meter.get())))).pack(anchor='w',padx=12)
-        row=ttk.Frame(root);row.pack(anchor='w',padx=12)
-        ttk.Label(row,text='Card class').pack(side='left')
-        self.card_class=tk.StringVar(value=read().get('card_class','auto'))
-        box=ttk.Combobox(row,textvariable=self.card_class,values=['auto']+sorted(load_card_config().get('classes',{})),width=12,state='readonly');box.pack(side='left',padx=6)
-        box.bind('<<ComboboxSelected>>',lambda e:update_session(lambda d:d.update(card_class=self.card_class.get())))
         ttk.Label(root,text='Stats on the character (tick = included)').pack(anchor='w',padx=12)
         table=ttk.Frame(root);table.pack(fill='both',expand=True,padx=12,pady=4)
         canvas=tk.Canvas(table,highlightthickness=0,height=250);bar=ttk.Scrollbar(table,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
@@ -2603,9 +2350,6 @@ class WatcherWindow:
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.state.set(state.replace('_',' '));self.state_label.configure(foreground=self.COLORS.get(state,'#000000'))
             self.char.set(f"{monitor.get('character') or 'Detecting character'}, level {monitor['level']}" if monitor.get('level') else '-');self.proc.set(f"PID {monitor['game_pid']}" if monitor.get('game_pid') else '-')
-            seen=getattr(self,'cards_seen',len(data.get('card_log',[])));entries=data.get('card_log',[])
-            for entry in entries[seen:]:self.say(entry['text'])
-            self.cards_seen=len(entries)
             if state!=self.last_state:self.say('State: '+state+(f" ({monitor.get('reason')})" if monitor.get('reason') else ''));self.last_state=state
             try:values=self.live_values(monitor) if alive else {}
             except Exception:values={}
@@ -2727,25 +2471,6 @@ def self_test():
             backend,clock,engine=self.recovery_fixture();backend.ambiguous=True
             for _ in range(3):engine.step()
             engine.forget();self.assertEqual(engine.dup,{})
-        def test_card_choice_follows_priority_lists(self):
-            spells=['legendary holy light new spell heals you','epic hammer of wrath new spell strikes','legendary divine shield new spell makes you immune','legendary consecration new spell holy ground']
-            self.assertEqual(choose_card(spells)['index'],3)
-            self.assertEqual(choose_card(spells[:3])['index'],2)
-            self.assertIsNone(choose_card(spells[:2]))
-            self.assertEqual(choose_card(['judgement new spell','conse cration new spell','holy shok new spell'])['index'] if False else 0,0)
-            upgrades=['rare judgement +40% damage','epic judgement -17% cooldown','rare judgement +36% area','rare luck +9% luck']
-            self.assertEqual(choose_card(upgrades)['index'],2)
-            self.assertEqual(choose_card(upgrades[:2]+upgrades[3:])['index'],1)
-            self.assertEqual(choose_card(['x +20% area','y +45% area'])['index'],1)
-            self.assertIsNone(choose_card(['+40% damage','+12% healing']))
-        def test_card_columns_and_popup_detection(self):
-            lines=[(900,230,1100,260,'LEVEL UP!'),(700,330,1300,360,'Choose a spell. Its rarity decides how strong it is.')]
-            for cx in (500,830,1160,1490):
-                for row,text in enumerate(('LEGENDARY','Consecration','New spell','Heals you','+21% healing')):lines.append((cx-60,800+row*30,cx+60,825+row*30,text))
-            lines.append((1000,1210,1100,1240,'LEVEL'))
-            info=parse_cards(lines,2000,1360)
-            self.assertTrue(info['active']);self.assertEqual(len(info['columns']),4);self.assertIn('consecration',info['columns'][1]['text'].lower())
-            self.assertFalse(parse_cards([l for l in lines if l[4]!='LEVEL UP!' and not l[4].startswith('Choose')],2000,1360)['active'])
         def test_character_detected_without_a_configured_name(self):
             memory,proc,header,recipe,name=self.layout_fixture(d=792,o=968)
             class Region:
@@ -2783,72 +2508,21 @@ def self_test():
             engine.forget();self.assertEqual(backend.released,1)
         def test_ocr_rows_are_parsed_and_bad_rows_skipped(self):
             self.assertEqual(parse_ocr_rows(['10,20,110,50|Hammer of Wrath','junk','1,2,3|short','5,6,7,8|']),[(10,20,110,50,'Hammer of Wrath'),(5,6,7,8,'')])
-        def test_fallback_takes_the_rarest_card_and_never_skips(self):
-            self.assertEqual(fallback_card(['common x','epic y','legendary z','rare w']),2)
-            self.assertEqual(fallback_card(['legendary a','legendary b']),0)
-            self.assertEqual(fallback_card(['x','y','z']),0)
-        def test_pick_cards_never_presses_reroll(self):
-            import inspect
-            self.assertNotIn('0x52',inspect.getsource(pick_cards))
-        def test_hunter_priorities_and_class_detection(self):
-            config=load_card_config()
-            texts=['legendary multi shot new spell fires','epic explosive trap new spell lays','rare volley new spell']
-            self.assertEqual(detect_card_class(texts,config),'Hunter')
-            cls,choice=choose_for_class(texts,config)
-            self.assertEqual((cls,choice['index'],choice['rank']),('Hunter',2,'volley'))
-            cls,choice=choose_for_class(['epic immolation trap new spell','rare aimed shot new spell','epic explosive trap new spell'],config,'Hunter')
-            self.assertEqual((choice['index'],choice['rank']),(2,'explosive trap'))
-            cls,choice=choose_for_class(['epic immolation trap new spell','rare aimed shot new spell'],config,'Hunter')
-            self.assertEqual(choice['rank'],'aimed shot')
-            self.assertIsNone(choose_for_class(['legendary multi shot new spell','rare arcane shot new spell'],config,'Hunter')[1])
-        def test_paladin_cards_are_not_chosen_by_hunter_lists(self):
-            config=load_card_config()
-            texts=['legendary consecration new spell','epic volley new spell']
-            self.assertEqual(choose_for_class(texts,config,'Paladin')[1]['rank'],'consecration')
-            self.assertEqual(choose_for_class(texts,config,'Hunter')[1]['rank'],'volley')
-        def test_upgrade_keywords_come_from_the_config_and_percent_beats_count(self):
-            self.assertEqual(choose_card(['+2 targets','+20% area','+9% damage'])['index'],1)
-            self.assertEqual(choose_card(['+10% damage','+40% damage'],upgrades=['damage'])['index'],1)
-            self.assertIsNone(choose_card(['+10% healing'],upgrades=['damage']))
-        def test_damage_done_rows_are_parsed(self):
-            lines=[(1931,1184,2017,1196,'Damage Done'),(2176,1208,2296,1218,'18886m (426.5k.93%)'),(1950,1228,2043,1239,'2. Explosive Trap'),(2206,1228,2275,1238,'731m (16.5k.'),
-                   (1950,1247,2030,1256,'3. Aimed Shot'),(2212,1248,2275,1258,'1.53m'),(1949,1268,2031,1279,'4. Cryptstalker'),(1000,1228,1100,1240,'5. Elsewhere on screen')]
-            panel=parse_damage_rows(lines,2305,1360)
-            self.assertEqual([(r,n) for r,n,_ in panel['named']],[(2,'Explosive Trap'),(3,'Aimed Shot'),(4,'Cryptstalker')])
-            self.assertEqual(min(y for y,_ in panel['numbers']),1208)
-            self.assertIsNone(parse_damage_rows(lines[1:],2305,1360))
-        def test_row_names_are_cleaned_and_snapped_to_known_spells(self):
-            self.assertEqual(clean_row_name('4 1. voile',['Volley','Aimed Shot']),'volley')
-            self.assertEqual(clean_row_name('t. Aimed Shot'),'Aimed Shot')
-            self.assertEqual(clean_row_name('Cryptstalker',['Volley']),'Cryptstalker')
-        def test_cards_follow_the_damage_ranking(self):
-            texts=['Explosive Trap Rank 8 » 9 +23% area','Aimed Shot Rank 5 » 6 -9% cooldown','Auto Shot Rank 10 » 11 +40% area']
-            self.assertEqual(choose_for_ranking(texts,['volley','explosive trap','aimed shot'],['area','cooldown','luck'])['index'],0)
-            self.assertEqual(choose_for_ranking(texts,['volley','aimed shot','explosive trap'],['area','cooldown','luck'])['index'],1)
-            self.assertIsNone(choose_for_ranking(texts,['volley'],['area']))
-            self.assertIsNone(choose_for_ranking(['new spell volley'],['volley'],['area']))
-            self.assertIsNone(choose_for_ranking(texts,[],['area']))
-            two=['Volley Rank 5 » 6 -9% cooldown','Volley Rank 6 » 7 +12% area']
-            self.assertEqual(choose_for_ranking(two,['volley'],['area','cooldown','luck'])['index'],1)
-        def test_card_spell_is_read_from_the_card_text(self):
-            self.assertEqual(card_spell('SPELLS Explosive Trap Rank 8 » 9 +23% area'),'Explosive Trap')
-            self.assertEqual(card_spell('Volley Rank 5 » 6'),'Volley')
         def update_archive(self,version,source=None,extra=None):
             import zipfile
             buffer=io.BytesIO()
             with zipfile.ZipFile(buffer,'w') as archive:
                 archive.writestr('Repo-main/game.py',source if source is not None else f"VERSION = '{version}'\nprint('x')\n")
-                archive.writestr('Repo-main/card_priorities.json','{"shipped": true}')
                 archive.writestr('Repo-main/README.md','new readme')
                 archive.writestr('Repo-main/session.json','must never be installed')
                 archive.writestr('Repo-main/../evil.txt','x')
             return buffer.getvalue()
-        def test_update_installs_newer_versions_and_keeps_user_files(self):
+        def test_update_installs_newer_versions_and_leaves_private_files(self):
             import tempfile
             with tempfile.TemporaryDirectory() as folder:
-                folder=Path(folder);(folder/'game.py').write_text("VERSION = '1.0.0'\n");(folder/'card_priorities.json').write_text('{"mine": true}');(folder/'session.json').write_text('{"private": true}')
+                folder=Path(folder);(folder/'game.py').write_text("VERSION = '1.0.0'\n");(folder/'session.json').write_text('{"private": true}')
                 self.assertEqual(apply_update_zip(self.update_archive('1.2.0'),folder,'1.0.0'),'1.2.0')
-                self.assertIn("1.2.0",(folder/'game.py').read_text());self.assertEqual((folder/'card_priorities.json').read_text(),'{"mine": true}')
+                self.assertIn("1.2.0",(folder/'game.py').read_text())
                 self.assertEqual((folder/'session.json').read_text(),'{"private": true}');self.assertEqual((folder/'README.md').read_text(),'new readme')
                 self.assertIn("1.0.0",(folder/'.update_backup'/'1.0.0'/'game.py').read_text());self.assertFalse((folder.parent/'evil.txt').exists())
         def test_update_ignores_same_or_older_and_rejects_broken_code(self):
@@ -3122,7 +2796,7 @@ if __name__ == '__main__':
         elif command in ('--help','-h','help'):
             print('setup --game PATH --name NAME (first time) | Preferred: (no arguments) = window | --background = silent watcher | auto | new-game [--apply] | status | stop')
             print('Manual: resolve-name | discover-name --name <character> | named-core --seconds 600 --background')
-            print('Diagnostics: meter-test | cards-test | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
+            print('Diagnostics: relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
             print('Each argument-based command accepts --help. Legacy start/apply-host were removed (they paused the game).')
         elif command in ('start','_worker','apply-host'):
             raise RuntimeError('Legacy process-pausing commands were removed. Use: auto --background')
@@ -3161,10 +2835,8 @@ if __name__ == '__main__':
                     with mutex('writer',0):named_core()
         elif command == 'self-test': self_test()
         elif command == 'gui':gui()
-        elif command == 'meter-test':meter_test()
         elif command == 'setup':setup_command()
         elif command in ('version','--version'):print(f'{APP_NAME} {VERSION}')
-        elif command == 'cards-test':cards_test()
         elif command == 'relayout':relayout()
         elif command == 'find-wallet':find_wallet()
         elif command == 'new-game':new_game()
