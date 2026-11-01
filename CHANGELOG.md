@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.2 — 2026-11-01
+
+- **Simpler window.** Status card, a *Raise talent cap* checkbox, and the *Max talents* picker with Create save. Everything else (Mode switch, cap number, Saves folder, What's new, stat targets, Log, Settings) is folded under **More**. The cap checkbox applies the cap now and every time the game starts, and unticking it restores 51.
+
 ## 1.7.1 — 2026-11-01
 
 - **Simpler first run.** The main window opens straight away, then a file picker asks you to locate the downloaded `AzerothSurvivors.exe`. The extra message box and the character-name question are gone (the name is detected automatically). Cancel the picker and the window stays open with a **Locate game** button.

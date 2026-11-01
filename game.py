@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.7.1'
+VERSION = '1.7.2'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2646,17 +2646,12 @@ class WatcherWindow:
         ttk.Label(text,textvariable=self.headline,font=('Segoe UI',12,'bold')).pack(anchor='w')
         ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=330).pack(anchor='w')
         self.toggle_button=ttk.Button(card,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='right')
-        modes=ttk.Frame(root);modes.pack(fill='x',padx=14,pady=(0,8))
-        self.mode=tk.StringVar(value='write');ttk.Label(modes,text='Mode').pack(side='left')
-        ttk.Radiobutton(modes,text='Write',variable=self.mode,value='write').pack(side='left',padx=(8,4))
-        ttk.Radiobutton(modes,text='Observe only',variable=self.mode,value='observe').pack(side='left')
+        self.mode=tk.StringVar(value='write')
+        self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
+        self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
         box=ttk.LabelFrame(root,text='Talents');box.pack(fill='x',padx=12,pady=(0,8))
         first=ttk.Frame(box);first.pack(fill='x',padx=8,pady=(6,2))
-        ttk.Label(first,text='Point cap').pack(side='left')
-        self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
-        ttk.Entry(first,textvariable=self.talent_cap,width=6).pack(side='left',padx=6)
-        ttk.Button(first,text='Apply',command=self.talent_apply).pack(side='left')
-        ttk.Button(first,text='Restore',command=self.talent_restore).pack(side='left',padx=6)
+        self.cap_check=ttk.Checkbutton(first,text=f'Raise talent cap to {self.talent_cap.get()}',variable=self.talent_auto,command=self.talent_toggle);self.cap_check.pack(side='left')
         self.talent_status=tk.StringVar(value='');ttk.Label(first,textvariable=self.talent_status,foreground='#2e7d32').pack(side='right')
         second=ttk.Frame(box);second.pack(fill='x',padx=8,pady=(6,2))
         ttk.Label(second,text='Max talents for').pack(side='left')
@@ -2665,18 +2660,13 @@ class WatcherWindow:
         if self.class_choice.get() not in names:self.class_choice.set('All classes')
         self.class_choice.pack(side='left',padx=6)
         ttk.Button(second,text='Create save',command=self.max_talents_create).pack(side='left')
-        ttk.Button(second,text='Open Saves folder',command=self.open_saves).pack(side='left',padx=6)
-        self.save_status=tk.StringVar(value='Then in the game: Options > Saves > Import Save. Apply the cap first.')
+        self.save_status=tk.StringVar(value='Then in the game: Options > Saves > Import Save.')
         ttk.Label(box,textvariable=self.save_status,foreground='#555555',wraplength=470).pack(anchor='w',padx=8,pady=(2,8))
-        self.field_vars={};self.live_vars={}
-        targets=read()['config']['targets']
-        self.sections=[]
-        for title,summary,build in (('Stats and targets',f'{len(targets)} fields',self.build_stats),('Log','',self.build_log),('Settings','updates, startup',self.build_settings)):
-            ttk.Separator(root).pack(fill='x',padx=12);section=Disclosure(root,title,summary,build);section.frame.pack(fill='x');self.sections.append(section)
+        self.field_vars={};self.live_vars={};self.sections=[]
+        ttk.Separator(root).pack(fill='x',padx=12);more=Disclosure(root,'More','stats, log, settings',self.build_more);more.frame.pack(fill='x')
         ttk.Separator(root).pack(fill='x',padx=12)
         foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(6,10))
-        ttk.Button(foot,text="What's new",command=self.whats_new).pack(side='left')
-        self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left',padx=10)
+        self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left')
         ttk.Label(foot,text='Solo or host only',foreground='#b26a00').pack(side='right')
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
@@ -2686,6 +2676,31 @@ class WatcherWindow:
         self.refresh()
         if not configured():root.after(400,self.locate_game)  # first run: the window is up, now ask where the game is
         elif not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
+    def build_more(self,body):
+        ttk=self.ttk
+        modes=ttk.Frame(body);modes.pack(fill='x',pady=(0,4))
+        ttk.Label(modes,text='Mode').pack(side='left')
+        ttk.Radiobutton(modes,text='Write',variable=self.mode,value='write').pack(side='left',padx=(8,4))
+        ttk.Radiobutton(modes,text='Observe only',variable=self.mode,value='observe').pack(side='left')
+        cap=ttk.Frame(body);cap.pack(fill='x',pady=(0,4))
+        ttk.Label(cap,text='Talent point cap').pack(side='left')
+        entry=ttk.Entry(cap,textvariable=self.talent_cap,width=6);entry.pack(side='left',padx=6)
+        for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e:self.cap_changed())
+        ttk.Button(cap,text='Open Saves folder',command=self.open_saves).pack(side='right')
+        ttk.Button(cap,text="What's new",command=self.whats_new).pack(side='right',padx=6)
+        for title,summary,build in (('Stats and targets',f"{len(read()['config']['targets'])} fields",self.build_stats),('Log','',self.build_log),('Settings','updates',self.build_settings)):
+            ttk.Separator(body).pack(fill='x');section=Disclosure(body,title,summary,build);section.frame.pack(fill='x');self.sections.append(section)
+    def cap_changed(self):
+        try:cap=self.talent_cap_value()
+        except ValueError as error:
+            self.say(str(error));self.talent_cap.set(str(read().get('talent_cap',TALENT_DEFAULT_CAP)));return
+        if cap==read().get('talent_cap',TALENT_DEFAULT_CAP):return
+        update_session(lambda d:d.update(talent_cap=cap));self.cap_check.configure(text=f'Raise talent cap to {cap}')
+        if self.talent_auto.get():self.talent_apply()
+    def talent_toggle(self):
+        update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))
+        if self.talent_auto.get():self.talent_apply()
+        else:self.talent_restore()
     def build_rows(self):
         ttk=self.ttk;data=read();disabled=set(data.get('gui_disabled',[]))
         for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
@@ -2711,8 +2726,6 @@ class WatcherWindow:
         ttk=self.ttk;tk=self.tk
         self.updates=tk.BooleanVar(value=read().get('auto_update',True))
         ttk.Checkbutton(body,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w')
-        self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
-        ttk.Checkbutton(body,text='Apply the talent cap when the game starts',variable=self.talent_auto,command=lambda:update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))).pack(anchor='w')
     def locate_game(self):
         from tkinter import filedialog
         path=filedialog.askopenfilename(parent=self.root,title='Select AzerothSurvivors.exe (the game you downloaded)',filetypes=[('Game executable','AzerothSurvivors.exe'),('Executable','*.exe')])
