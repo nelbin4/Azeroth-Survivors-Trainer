@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.0'
+VERSION = '1.9.1'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -505,7 +505,7 @@ class AutoBackend:
     def core_candidate(self,base):
         raw=self.memory.read_bytes(base,32);values=struct.unpack('<8f',raw)
         if not core_window_ok(values):raise ValueError('Stat block changed.')
-        if not core_headers(self.memory,base,self.core_delta):raise ValueError('Text header missing.')
+        if not core_headers(self.memory,base):raise ValueError('Text header missing.')  # any header: nearby text changes as the game runs
         return dict(pid=self.process.pid,created=self.process.create_time(),base=base,player_id=1,name='',level=0,values={'Damage':values[1],'Max Health':values[0]},
                     pointer=0,capacity=0,length=0,kinds=[],amounts=[])
     def seek_core(self,now):
@@ -518,7 +518,6 @@ class AutoBackend:
         if now<self.core_next:return []
         self.core_next=now+8
         found=core_scan(self.memory,cancelled=lambda:self.signal.wait(0),first=[b for b,_ in self.core_pending])
-        if self.core_delta is not None:found=[(b,d) for b,d in found if d==self.core_delta] or found
         self.core_pending=found
         if not found:return []
         live=core_live(self.memory,[b for b,_ in found])

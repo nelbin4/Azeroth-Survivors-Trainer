@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.1 — 2026-11-01
+
+- **Fix: Damage was not applied ("Reconnecting").** The check that a text header sits before the stat block was tied to one exact distance learned in the first scan; a nearer, changing piece of text could be the one it remembered, so the check failed on later reads. Any header in range now counts.
+
 ## 1.9.0 — 2026-11-01
 
 - **Finds Damage by itself on any new game build, quickly.** After a game patch there is no learning wait and no saved layout needed: the trainer scans for the stat block by its fixed field pattern (health, damage, haste, crit, crit damage, speed, pickup, experience) next to a text header, tells the live copy from stale ones by nudging Damage 1% (the game recalculates the live one), and pins Damage at once. It remembers where it found it, so a watcher restart in the same game takes about 4 seconds; a cold start on a patched build takes about 10 to 30 seconds. Verified live on build `eb7447…`.
