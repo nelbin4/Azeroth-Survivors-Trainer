@@ -15,7 +15,7 @@
 
 ## Get started in 3 steps
 
-1. **Download** the latest zip from the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases) and unzip it anywhere. You don't need to install anything else. *(No release listed yet? Use the Python steps in "Install in detail" below.)*
+1. **Download** the latest zip from the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases) and unzip it anywhere. You don't need to install anything else. *(Prefer Python? See "Install in detail" below.)*
 2. **Open Azeroth Survivors** (the Windows version) and start a **solo run**, or host one.
 3. **Double-click `AzerothSurvivorsTrainer.exe`.** The window opens right away; the first time, it asks you to pick the downloaded `AzerothSurvivors.exe`. That's it, there is no name to type. The window shows what it's doing, and your stats are applied once the run is going.
 
@@ -41,7 +41,7 @@ Everything below is for people who want to know more or to use the command line.
 
 ### Option A: the Windows program (no Python needed)
 
-Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. The first start takes a few seconds while the bundled libraries unpack. Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
+Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. The first start takes a few seconds while the bundled libraries unpack. The newest release is always on the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases). Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
 
 > Windows SmartScreen or your antivirus may warn about an unsigned program that reads another program's memory. That is expected for any trainer; the source of everything is in this repository.
 
@@ -107,7 +107,7 @@ The window is one status card (what the trainer is doing, your character, and a 
 
 ### Max talents without clicking
 
-1. Start the game and **Apply** the talent cap (150 covers every class; the biggest build is 128 points).
+1. Start the game and tick **Raise talent cap** (150 covers every class; the biggest build is 128 points).
 2. In the Talents box pick a class (or *All classes*) and press **Create save**. The new file is `AzerothSurvivors-max-talents-<class>.sav` in the game's `Saves` folder (*Open Saves folder* gets you there), and your current save is copied to `AzerothSurvivors-before-max-talents-<time>.sav`.
 3. In the game: **Options, Saves, Import Save**, choose the new file, check the preview and accept.
 
