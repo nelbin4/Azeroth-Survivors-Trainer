@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.2 — 2026-11-02
+
+- **Fix: several live characters.** The game can hold other live hero records besides yours (companions, a lobby); the trainer used to give up ("blocked ambiguous"). It now picks yours: the one whose header text is the name in the player frame on screen, or, when the screen does not show it (menus), the name remembered from the last run. Verified live: Damage applied to the right character.
+
 ## 1.9.1 — 2026-11-01
 
 - **Fix: Damage was not applied ("Reconnecting").** The check that a text header sits before the stat block was tied to one exact distance learned in the first scan; a nearer, changing piece of text could be the one it remembered, so the check failed on later reads. Any header in range now counts.

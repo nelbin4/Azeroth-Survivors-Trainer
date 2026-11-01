@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.1'
+VERSION = '1.9.2'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -227,6 +227,9 @@ def core_window_ok(values):
 
 def core_headers(memory,base,only=None):
     """Distances from a text header (cap, pointer, length of a short word) to the stat block; the text is only an anchor."""
+    return [d for d,_ in core_header_hits(memory,base,only)]
+
+def core_header_hits(memory,base,only=None):
     import re
     reach=1536;lo=base-reach
     try:raw=memory.read_bytes(lo,reach)
@@ -239,7 +242,7 @@ def core_headers(memory,base,only=None):
         if not(2<=length<=24 and length<=cap<=256 and 0x10000<=pointer<0x7ffffffff000):continue
         try:text=memory.read_bytes(pointer,length).decode('utf-8')
         except Exception:continue
-        if re.fullmatch(r"[^\W\d_][\w' -]*",text):found.append(distance)
+        if re.fullmatch(r"[^\W\d_][\w' -]*",text):found.append((distance,text))
     return found
 
 def core_scan(memory,cancelled=lambda:False,budget=40.,first=(),workers=4):
@@ -321,7 +324,7 @@ class AutoBackend:
         self.scan_found={};self.scan_errors=0;self.scan_bytes=0;self.scan_complete=False;self.scan_restart=0;self.last_hint=0
         self.backed_up=set();self.missing_sources=[]
         self.base_recipe=dict(self.recipe);self.base_targets=list(targets);self.build=data['game_sha256'].lower();self.learning=False
-        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.disabled=set();self.write_only=None;self.core=False;self.core_base=None;self.core_delta=None;self.core_pending=[];self.core_next=0
+        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.disabled=set();self.write_only=None;self.core=False;self.core_base=None;self.core_delta=None;self.core_pending=[];self.core_next=0;self.core_name=None
         self.hints.update(c['base'] for c in data.get('name_discovery',{}).get('candidates',[]))
         self.hints.update(int(h['base']) for h in data.get('auto_hints',[]) if h.get('build','').lower()==data['game_sha256'].lower() and h.get('name')==self.name)
     def find_process(self):
@@ -430,7 +433,7 @@ class AutoBackend:
     def bind(self,generation):
         from PyMemoryEditor import OpenProcess
         self.close();self.process=self.found_process;self.generation=generation
-        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.core_base=None;self.core_pending=[];self.core_next=0
+        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.core_base=None;self.core_pending=[];self.core_next=0;self.core_name=None
         saved=read().get('core_builds',{}).get(self.build) or {}
         if saved.get('pid')==generation[0] and saved.get('created')==generation[1]:self.core_base=saved.get('base');self.core_delta=saved.get('delta')
         self.memory=OpenProcess(pid=generation[0],permission=0x438)
@@ -524,10 +527,22 @@ class AutoBackend:
         return self.core_found(live) if live else []
     def core_found(self,live):
         delta=dict(self.core_pending)[live[0]]
-        if len(live)>1:self.ambiguous_names=['several characters'];return [self.core_candidate(b) for b in live]
+        if len(live)>1:
+            # Several live characters (companions, a hosted lobby): yours is the one whose header text is the name in the player frame.
+            texts={b:{x for _,x in core_header_hits(self.memory,b) if len(x)>=3} for b in live}
+            try:chosen=window_player_name(self.process.pid,sorted(set().union(*texts.values())))
+            except Exception:chosen=None
+            remembered=(read().get('core_builds',{}).get(self.build) or {}).get('name')  # the screen shows the name only in a run
+            if not chosen and remembered in set().union(*texts.values()):chosen=remembered
+            mine=[b for b in live if chosen and chosen in texts[b]]
+            if len(mine)!=1:self.ambiguous_names=['several characters'];return [self.core_candidate(b) for b in live]
+            live=mine;delta=dict(self.core_pending)[live[0]];self.core_name=chosen
         self.core_base=live[0];self.core_delta=delta;self.core_pending=[];digest=self.build
-        pid,created=self.generation[0],self.generation[1];base=self.core_base
-        update_session(lambda d:d.setdefault('core_builds',{}).__setitem__(digest,dict(delta=delta,found=time.time(),pid=pid,created=created,base=base)))
+        pid,created=self.generation[0],self.generation[1];base=self.core_base;name=self.core_name
+        def store(d):
+            old=d.setdefault('core_builds',{}).get(digest) or {}
+            d['core_builds'][digest]=dict(delta=delta,found=time.time(),pid=pid,created=created,base=base,name=name or old.get('name'))
+        update_session(store)
         return [self.core_candidate(self.core_base)]
     def core_apply(self,candidate):
         want=next((v for n,o,f,v in self.targets if n=='Damage'),None)
