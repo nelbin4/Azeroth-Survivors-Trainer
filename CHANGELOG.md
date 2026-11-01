@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.1 — 2026-11-01
+
+- **Simpler first run.** The main window opens straight away, then a file picker asks you to locate the downloaded `AzerothSurvivors.exe`. The extra message box and the character-name question are gone (the name is detected automatically). Cancel the picker and the window stays open with a **Locate game** button.
+
 ## 1.7.0 — 2026-11-01
 
 - **Max talents for any class (or all nine).** New *Max talents for [class] / Create save* row in the Talents box and `python game.py max-talents [--class mage]`. It reads every talent and its maximum rank from the game file (9 classes x 3 trees, 355 talents, 121 to 128 points per class), writes them into a copy of your save in the game's own signed save format, and leaves your real save untouched. Your current save is backed up first. Import the new file in the game (Options, Saves, Import Save) after raising the talent cap, or the game trims the build back to 51 points.

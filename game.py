@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.7.0'
+VERSION = '1.7.1'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2540,6 +2540,12 @@ def configure(game_exe,name):
     data['game_exe']=str(exe);data.setdefault('native_identity_recipe',{})['name']=name
     data.pop('last_name',None);save(data);return data
 
+def seed_session():
+    """Create session.json from the example profile with no game path yet (the window asks for it)."""
+    example=ROOT/'profile.example.json'
+    if not example.exists():raise RuntimeError('profile.example.json is missing; re-download the project.')
+    data=json.loads(example.read_text(encoding='utf-8'));data.pop('game_exe',None);data.setdefault('native_identity_recipe',{})['name']='<auto>';save(data)
+
 def configured():
     try:
         data=read()
@@ -2678,7 +2684,8 @@ class WatcherWindow:
         if notice:
             self.say(notice);update_session(lambda d:d.pop('update_notice',None))
         self.refresh()
-        if not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
+        if not configured():root.after(400,self.locate_game)  # first run: the window is up, now ask where the game is
+        elif not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
     def build_rows(self):
         ttk=self.ttk;data=read();disabled=set(data.get('gui_disabled',[]))
         for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
@@ -2706,8 +2713,16 @@ class WatcherWindow:
         ttk.Checkbutton(body,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w')
         self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
         ttk.Checkbutton(body,text='Apply the talent cap when the game starts',variable=self.talent_auto,command=lambda:update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))).pack(anchor='w')
+    def locate_game(self):
+        from tkinter import filedialog
+        path=filedialog.askopenfilename(parent=self.root,title='Select AzerothSurvivors.exe (the game you downloaded)',filetypes=[('Game executable','AzerothSurvivors.exe'),('Executable','*.exe')])
+        if not path:self.say('Game not located yet. Press Locate game when you are ready.');return
+        try:configure(path,None)
+        except Exception as error:self.say(f'Could not use that file: {error}');return
+        self.say(f'Game set to {path}.');self.start()
     def toggle_run(self):
-        if self.alive:self.stop()
+        if not configured():self.locate_game()
+        elif self.alive:self.stop()
         else:self.start()
     def open_saves(self):
         try:os.startfile(save_folder()/'Saves')
@@ -2777,6 +2792,7 @@ class WatcherWindow:
             finally:self.busy=False
         threading.Thread(target=target,daemon=True).start()
     def start(self):
+        if not configured():return self.locate_game()
         trace=self.mode.get()=='observe'
         def work():
             stop();time.sleep(1)
@@ -2803,6 +2819,11 @@ class WatcherWindow:
         return {n:struct.unpack_from('<'+f,raw,off+24)[0] for n,off,f,_ in effective_targets(data,self.digest)}
     def refresh(self):
         try:
+            if not configured():
+                self.alive=False;self.headline.set('Game not set up yet');self.sub.set('Locate AzerothSurvivors.exe to begin.')
+                self.dot.itemconfigure(self.dot_id,fill='#b26a00');self.toggle_button.configure(text='Locate game',width=12)
+                self.root.after(1000,self.refresh);return
+            self.toggle_button.configure(width=8)
             data=read();monitor=data.get('auto_monitor',{});alive=auto_alive(data);self.alive=alive
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.headline.set(STATE_TITLES.get(state,state.replace('_',' ').capitalize()));self.dot.itemconfigure(self.dot_id,fill=self.COLORS.get(state,'#6b6b6b'))
@@ -2831,13 +2852,7 @@ def gui():
     import tkinter as tk
     try:
         root=tk.Tk()
-        if not configured():
-            from tkinter import filedialog,messagebox,simpledialog
-            root.withdraw();messagebox.showinfo(APP_NAME,'First run: choose AzerothSurvivors.exe, then enter your character name.')
-            path=filedialog.askopenfilename(title='Select AzerothSurvivors.exe',filetypes=[('Game executable','*.exe')])
-            name=simpledialog.askstring(APP_NAME,'Character name exactly as shown in game (leave blank to detect it automatically):') if path else None
-            if not path:return
-            configure(path,name);root.deiconify()
+        if not SESSION.exists():seed_session()
         WatcherWindow(root);root.mainloop()
     except Exception:
         import traceback;(ROOT/'gui-error.log').write_text(traceback.format_exc(),encoding='utf-8')
@@ -3325,6 +3340,23 @@ def self_test():
             self.assertEqual(o[28], 3.)
         def test_insufficient(self):
             with self.assertRaises(RuntimeError): observations(argparse.Namespace(hp=700))
+        def test_first_run_seed(self):
+            import tempfile
+            global SESSION
+            old = SESSION
+            with tempfile.TemporaryDirectory() as folder:
+                SESSION = Path(folder) / 'session.json'
+                fake = Path(folder) / 'AzerothSurvivors.exe'
+                try:
+                    seed_session()
+                    self.assertFalse(configured())
+                    self.assertTrue(read()['config']['targets'])
+                    fake.write_bytes(b'MZ')
+                    configure(str(fake), None)
+                    self.assertTrue(configured())
+                    self.assertEqual(read()['native_identity_recipe']['name'], '<auto>')
+                finally:
+                    SESSION = old
         def test_record(self):
             class Process:
                 pid = 1

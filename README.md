@@ -17,7 +17,7 @@
 
 1. **Download** the latest zip from the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases) and unzip it anywhere. You don't need to install anything else. *(No release listed yet? Use the Python steps in "Install in detail" below.)*
 2. **Open Azeroth Survivors** (the Windows version) and start a **solo run**, or host one.
-3. **Double-click `AzerothSurvivorsTrainer.exe`.** The first time, it asks where the game is (pick `AzerothSurvivors.exe`) and, optionally, your character name: **leave the name blank**. That's it. The window shows what it's doing, and your stats are applied once the run is going.
+3. **Double-click `AzerothSurvivorsTrainer.exe`.** The window opens right away; the first time, it asks you to pick the downloaded `AzerothSurvivors.exe`. That's it, there is no name to type. The window shows what it's doing, and your stats are applied once the run is going.
 
 If the game runs as administrator, run the trainer as administrator too.
 
@@ -58,7 +58,7 @@ python game.py
 
 ## First run in detail
 
-The window asks once for the path to `AzerothSurvivors.exe`, and optionally for your character name. **Leave the name blank and the trainer detects your character itself**, so switching characters needs no setup. You can rename your character in the lobby whenever you like; the name is re-detected for every run. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage.
+The window opens first and asks once for the path to `AzerothSurvivors.exe` (if you cancel, press **Locate game** later). It never asks for a character name: the trainer detects your character itself, so switching characters needs no setup. You can rename your character in the lobby whenever you like; the name is re-detected for every run. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage.
 
 Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`, adding `--name YourCharacter` if you want to pin one. Your settings are stored in `session.json` next to the program and are never uploaded.
 
@@ -159,7 +159,7 @@ python build_exe.py --console  # console build, handy for testing commands
 ```
 
 ```bash
-python game.py self-test    # 54 tests, no game required
+python game.py self-test    # 55 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.
