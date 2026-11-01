@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.0 — 2026-11-01
+
+- **Talent cap** (migrated from `talent_150.py`): raise the talent point cap from 51 (to 150 by default, any value 1 to 999) from the window or `python game.py talents apply|restore|status|find`. It rewrites the 32-bit constant in three game instructions in memory only (nothing on disk), with plain Windows calls: no Frida, no hooks. Every spot is checked before writing, verified by readback and rolled back on failure. *Apply when the game starts* is optional and off by default.
+- **Find talent spots**: a game update moves the three spots. The search tests candidate places one at a time, restores each immediately, checks the cap shown on the talents screen, stops if the game closes, and remembers the result per game version. It needs the talents screen open and a confirmation, because a mistake could crash the game.
+
 ## 1.3.0 — 2026-10-30
 
 - Window: a plain-English status line instead of state codes; the Target column is editable (typed values are validated, saved, and the watcher restarts to use them; speed stays locked); a *What's new* button shows the latest release notes.
