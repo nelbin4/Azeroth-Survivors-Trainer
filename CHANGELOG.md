@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0 — 2026-11-01
+
+- **Talent cap is back, and it works.** Raise the talent point cap from 51 (default 150, any value 1 to 999) from the window's *Talents* box or `python game.py talents apply|restore|status`. Verified on game build `71e5f176…`: *Talents (148)*, *2 of 150 earned*.
+- **How it finds the spots:** by scanning the game file on disk (never by trying places in the live game). The cap is returned where the talent-cost loop ends at a running cost of 875: `cmp reg,0x36b ; jne ; mov reg,51`. This build has 20 such copies.
+- **How it applies them:** all copies together, while the game is paused for a few milliseconds (17 ms in the live test), with every spot checked first, verified after, and rolled back on any failure. The earlier crashes came from changing the copies one at a time, which left the game holding two different caps.
+- Memory only; closing the game undoes it, so it is applied again each launch. *Apply when the game starts* is optional and off by default.
+
 ## 1.5.0 — 2026-11-01
 
 - **Removed the talent cap** (migrated from `talent_150.py` in 1.4.0): the Talents box, the `talents` command, the code-patching helper and their tests. On the current game build the cap is a computed value, not a constant in the code, and a read-only search found no stored value to edit; patching instructions crashed the game. The findings stay in the technical notes.
