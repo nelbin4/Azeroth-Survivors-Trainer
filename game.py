@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.8.2'
+VERSION = '1.9.0'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -118,14 +118,7 @@ def actor_snapshot(memory,process,base,recipe,name,expected_id=None,health_ceili
                 level=level,owner=base+owner_off,pointer=pointer,capacity=capacity,length=count,kinds=kinds,
                 amounts=amounts,values=values,hp_transition=f(hp_off)>f(0)+1)
 
-KNOWN_LAYOUTS = {
-    # Game build eb7447...: stats 912 bytes after the name header, level at -104, id at -144, no verified modifier list, so no source targets.
-    # Only Damage is written (pinned every 20 ms; the game recalculates it every couple of seconds). A first test that wrote 14 stats at
-    # 9999-style values hung and then crashed the game; the other stats are added one at a time as each is proven. See docs/TECHNICAL_NOTES.md.
-    'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':dict(delta=912,no_owner=True,level_offset=-104,id_offset=-144,
-        skip_offsets=[8,44,60,64,68,72,120],write_only=['Damage'],
-        field_offsets={'Regeneration':40,'Area':44,'Gold Bonus':52,'Targets':56,'Echo':60,'Current Health':116},source='read off the character sheet'),
-}
+KNOWN_LAYOUTS = {}  # layouts shipped with the trainer (none: unseen builds are found by their field pattern)
 
 LEARN_FLOATS = (0,4,8,12,16,20,28,32,36,44,48,60,64,72,112)
 
@@ -223,6 +216,86 @@ def find_characters(memory,process,recipe,cancelled=lambda:False,budget=40.):
                 except Exception:continue
     return found
 
+
+CORE_CHUNK = 4194304
+
+def core_window_ok(values):
+    """The first eight stat fields in their fixed order: health, damage, haste, crit, crit damage, speed, pickup, experience."""
+    hp,damage,haste,crit,critdmg,speed,pickup,exp=values
+    return (50<=hp<=1e6 and 0.5<=damage<=2e4 and 0<haste<=10 and 0.01<crit<=200 and 1.2<=critdmg<=200
+            and 0.5<=speed<=3 and 10<=pickup<=1e4 and 0.99<=exp<=1e6)
+
+def core_headers(memory,base,only=None):
+    """Distances from a text header (cap, pointer, length of a short word) to the stat block; the text is only an anchor."""
+    import re
+    reach=1536;lo=base-reach
+    try:raw=memory.read_bytes(lo,reach)
+    except Exception:return []
+    found=[]
+    for pos in range((-lo)%8,reach-24,8):
+        distance=base-(lo+pos)
+        if only is not None and distance!=only:continue
+        cap,pointer,length=struct.unpack_from('<3Q',raw,pos)
+        if not(2<=length<=24 and length<=cap<=256 and 0x10000<=pointer<0x7ffffffff000):continue
+        try:text=memory.read_bytes(pointer,length).decode('utf-8')
+        except Exception:continue
+        if re.fullmatch(r"[^\W\d_][\w' -]*",text):found.append(distance)
+    return found
+
+def core_scan(memory,cancelled=lambda:False,budget=40.,first=(),workers=4):
+    """Read-only: stat blocks that match the field pattern and sit after a text header. Chunks near earlier hits go first."""
+    import numpy as np
+    from concurrent.futures import ThreadPoolExecutor
+    chunks=[]
+    for region in memory.snapshot_memory_regions():
+        if region.is_readable and region.is_writable and not region.is_executable:
+            for off in range(0,region.size,CORE_CHUNK):chunks.append((region.address+off,min(CORE_CHUNK+32,region.size-off)))
+    chunks.sort(key=lambda c:0 if any(c[0]<=h<c[0]+CORE_CHUNK for h in first) else 1)
+    deadline=time.monotonic()+budget;found=[]
+    def work(chunk):
+        try:raw=memory.read_bytes(*chunk)
+        except Exception:return []
+        f=np.frombuffer(raw[:len(raw)//4*4],dtype='<f4')
+        if len(f)<9:return []
+        n=len(f)-8
+        with np.errstate(all='ignore'):
+            ok=((f[:n]>=50)&(f[:n]<=1e6)&(f[1:n+1]>=0.5)&(f[1:n+1]<=2e4)&(f[2:n+2]>0)&(f[2:n+2]<=10)
+               &(f[3:n+3]>0.01)&(f[3:n+3]<=200)&(f[4:n+4]>=1.2)&(f[4:n+4]<=200)&(f[5:n+5]>=0.5)&(f[5:n+5]<=3)
+               &(f[6:n+6]>=10)&(f[6:n+6]<=1e4)&(f[7:n+7]>=0.99)&(f[7:n+7]<=1e6))
+        return [chunk[0]+int(i)*4 for i in np.flatnonzero(ok) if i*4<CORE_CHUNK]
+    with ThreadPoolExecutor(workers) as pool:
+        for start in range(0,len(chunks),workers*4):
+            if cancelled():raise InterruptedError('Stop requested.')
+            if time.monotonic()>=deadline:break
+            for hits in pool.map(work,chunks[start:start+workers*4]):
+                for base in hits:
+                    distances=core_headers(memory,base)
+                    if distances:found.append((base,distances[-1]))
+    return found
+
+def core_live(memory,bases,seconds=4.5):
+    """Which of these copies is the live one? Nudge Damage by 1%; the game recalculates the live record within seconds, copies stay."""
+    marks={}
+    for base in bases:
+        try:
+            before=memory.read_bytes(base+4,4);value=struct.unpack('<f',before)[0]
+            marker=struct.pack('<f',value*1.01+.01);memory.write_bytes(base+4,marker);marks[base]=(before,marker)
+        except Exception:pass
+    live=set();end=time.monotonic()+seconds
+    while time.monotonic()<end and len(live)<len(marks):
+        time.sleep(.15)
+        for base,(before,marker) in marks.items():
+            if base in live:continue
+            try:
+                if memory.read_bytes(base+4,4)!=marker:live.add(base)
+            except Exception:pass
+    for base,(before,marker) in marks.items():
+        if base not in live:
+            try:
+                if memory.read_bytes(base+4,4)==marker:memory.write_bytes(base+4,before)
+            except Exception:pass
+    return sorted(live)
+
 class AutoBackend:
     """Live access adapter. Discovery is incremental, cancellable and read-only."""
     def __init__(self,data,signal):
@@ -248,7 +321,7 @@ class AutoBackend:
         self.scan_found={};self.scan_errors=0;self.scan_bytes=0;self.scan_complete=False;self.scan_restart=0;self.last_hint=0
         self.backed_up=set();self.missing_sources=[]
         self.base_recipe=dict(self.recipe);self.base_targets=list(targets);self.build=data['game_sha256'].lower();self.learning=False
-        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.disabled=set();self.write_only=None
+        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.disabled=set();self.write_only=None;self.core=False;self.core_base=None;self.core_delta=None;self.core_pending=[];self.core_next=0
         self.hints.update(c['base'] for c in data.get('name_discovery',{}).get('candidates',[]))
         self.hints.update(int(h['base']) for h in data.get('auto_hints',[]) if h.get('build','').lower()==data['game_sha256'].lower() and h.get('name')==self.name)
     def find_process(self):
@@ -278,9 +351,11 @@ class AutoBackend:
             self.set_layout(None);self.learning=False;return
         learned=read().get('learned_builds',{}).get(digest) or KNOWN_LAYOUTS.get(digest)
         if learned and 'delta' in learned:
-            self.set_layout(learned)
+            self.set_layout(learned);self.core=False
             self.learning=False
-        else:self.learning=True
+        else:
+            # An unseen build: find the stat block by its field pattern instead of a slow name-based learning.
+            self.learning=False;self.core=True;self.core_delta=(read().get('core_builds',{}).get(digest) or {}).get('delta')
     def set_layout(self,learned):
         """Install a learned (or the original) layout; unverified fields are never written."""
         recipe=dict(self.base_recipe);skip=set();moved={}
@@ -355,7 +430,9 @@ class AutoBackend:
     def bind(self,generation):
         from PyMemoryEditor import OpenProcess
         self.close();self.process=self.found_process;self.generation=generation
-        self.learn_headers=None;self.learn_samples=[];self.next_learn=0
+        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.core_base=None;self.core_pending=[];self.core_next=0
+        saved=read().get('core_builds',{}).get(self.build) or {}
+        if saved.get('pid')==generation[0] and saved.get('created')==generation[1]:self.core_base=saved.get('base');self.core_delta=saved.get('delta')
         self.memory=OpenProcess(pid=generation[0],permission=0x438)
         self.injected.clear();self.backed_up.clear();self.reset_scan()
         lease=self.data.get('auto_last_verified',{})
@@ -368,6 +445,7 @@ class AutoBackend:
     def reset_scan(self):
         self.regions=[];self.region_index=0;self.offset=0;self.scan_found={};self.scan_errors=0;self.scan_bytes=0;self.scan_complete=False
     def snapshot(self,candidate):
+        if self.core:return self.core_candidate(candidate['base'])
         key=(self.generation[0],self.generation[1],candidate['base'],candidate['player_id'])
         for attempt in range(3):
             try:
@@ -376,6 +454,8 @@ class AutoBackend:
             except (ValueError,RuntimeError):
                 if attempt==2:raise
                 if self.signal.wait(.005):raise InterruptedError('Stop requested.')
+    def snapshot_core(self,candidate):
+        return self.core_candidate(candidate['base'])
     def at(self,base):
         # Discovery never gets the relaxed health rule for an unknown identity.
         return actor_snapshot(self.memory,self.process,base,self.recipe,self.name)
@@ -422,6 +502,44 @@ class AutoBackend:
         update_session(remember)
         mine=[c for c in found if c['name']==chosen];self.hints.update(c['base'] for c in mine)
         return mine
+    def core_candidate(self,base):
+        raw=self.memory.read_bytes(base,32);values=struct.unpack('<8f',raw)
+        if not core_window_ok(values):raise ValueError('Stat block changed.')
+        if not core_headers(self.memory,base,self.core_delta):raise ValueError('Text header missing.')
+        return dict(pid=self.process.pid,created=self.process.create_time(),base=base,player_id=1,name='',level=0,values={'Damage':values[1],'Max Health':values[0]},
+                    pointer=0,capacity=0,length=0,kinds=[],amounts=[])
+    def seek_core(self,now):
+        if self.core_base:
+            try:return [self.core_candidate(self.core_base)]
+            except Exception:self.core_base=None
+        if self.core_pending:
+            live=core_live(self.memory,[b for b,_ in self.core_pending],3.)
+            if live:return self.core_found(live)
+        if now<self.core_next:return []
+        self.core_next=now+8
+        found=core_scan(self.memory,cancelled=lambda:self.signal.wait(0),first=[b for b,_ in self.core_pending])
+        if self.core_delta is not None:found=[(b,d) for b,d in found if d==self.core_delta] or found
+        self.core_pending=found
+        if not found:return []
+        live=core_live(self.memory,[b for b,_ in found])
+        return self.core_found(live) if live else []
+    def core_found(self,live):
+        delta=dict(self.core_pending)[live[0]]
+        if len(live)>1:self.ambiguous_names=['several characters'];return [self.core_candidate(b) for b in live]
+        self.core_base=live[0];self.core_delta=delta;self.core_pending=[];digest=self.build
+        pid,created=self.generation[0],self.generation[1];base=self.core_base
+        update_session(lambda d:d.setdefault('core_builds',{}).__setitem__(digest,dict(delta=delta,found=time.time(),pid=pid,created=created,base=base)))
+        return [self.core_candidate(self.core_base)]
+    def core_apply(self,candidate):
+        want=next((v for n,o,f,v in self.targets if n=='Damage'),None)
+        if want is None or 'Damage' in self.disabled:return dict(writes=0,values=candidate['values'])
+        base=candidate['base'];target=struct.pack('<f',want);writes=0;end=time.monotonic()+.4;n=0
+        while time.monotonic()<end:
+            if self.signal.wait(0):raise InterruptedError('Stop requested.')
+            if n%10==0:self.core_candidate(base)  # stop at once if the record moved or changed shape
+            if self.memory.read_bytes(base+4,4)!=target:self.memory.write_bytes(base+4,target);writes+=1
+            n+=1;time.sleep(.02)
+        return dict(writes=writes,values=dict(candidate['values'],Damage=want))
     def seek_plain(self,now):
         found={}
         for base in sorted(self.hints):
@@ -441,6 +559,7 @@ class AutoBackend:
             else:self.ambiguous_names=sorted(names)
         return candidates
     def seek(self,now):
+        if self.core:return self.seek_core(now)
         if self.recipe.get('no_owner'):return self.seek_plain(now)
         if self.name is None:return self.detect_character(now)
         found={}
@@ -490,6 +609,7 @@ class AutoBackend:
     def run_reset(self):
         self.injected.clear();self.backed_up.clear()
     def apply(self,candidate):
+        if self.core:return self.core_apply(candidate)
         result=self.apply_once(candidate)
         if self.recipe.get('no_owner'):self.hold(candidate['base'],.4)  # these stats are recalculated every couple of seconds: pin them between steps
         return result
@@ -591,7 +711,8 @@ class AutoRecovery:
             values=fresh.get('values',{});previous=self.last_values
             gold_gain='Gold Wallet' in values and 'Gold Wallet' in previous and values['Gold Wallet']>previous['Gold Wallet']
             damage=all(k in values and k in previous for k in ('Max Health','Current Health')) and values['Max Health']==previous['Max Health'] and values['Current Health']<previous['Current Health']
-            if not reset and (fresh['level']>self.baseline or gold_gain or damage):
+            if getattr(self.backend,'core',False) and not reset:self.active=True;self.last_progress=now  # pattern-found record: apply at once
+            elif not reset and (fresh['level']>self.baseline or gold_gain or damage):
                 self.active=True;self.baseline=fresh['level'];self.last_progress=now
             self.last_values=dict(values)
             if now-self.last_progress>120:self.active=False
@@ -3084,6 +3205,24 @@ def self_test():
             memory.snapshot_memory_regions=lambda:[Region()]
             found=find_characters(memory,proc,dict(recipe,owner_offset=968))
             self.assertEqual([(c['name'],c['player_id']) for c in found],[('Nelbin',777)])
+        def test_core_scan_finds_the_stat_block_by_its_field_pattern(self):
+            BASE=0x100000;mem=bytearray(0x20000);H=0x100400
+            def put(address,data):mem[address-BASE:address-BASE+len(data)]=data
+            put(0x108000,b'Anyone');put(H,struct.pack('<3Q',8,0x108000,6))
+            put(H+700,struct.pack('<8f',800.,2.5,.6,.24,2.3,1.3,30.,1.))
+            put(0x10a000,struct.pack('<8f',53.4,39.3,0.,53.4,39.4,3.,53.4,39.3))  # position-like data: must be ignored
+            class Memory:
+                def read_bytes(_,address,size):
+                    if not(BASE<=address and address+size<=BASE+len(mem)):raise OSError('unreadable')
+                    return bytes(mem[address-BASE:address-BASE+size])
+                def write_bytes(_,address,data):put(address,data)
+                def snapshot_memory_regions(_):
+                    class Region:address=BASE;size=len(mem);is_readable=True;is_writable=True;is_executable=False
+                    return [Region()]
+            found=core_scan(Memory())
+            self.assertEqual(found,[(H+700,700)])
+            self.assertEqual(core_live(Memory(),[H+700],.3),[])  # nothing recalculates it here, so it counts as a stale copy
+            self.assertEqual(struct.unpack('<f',bytes(mem[H+704-BASE:H+708-BASE]))[0],2.5)  # and is restored
         def test_stats_only_layout_is_found_without_a_name(self):
             BASE=0x100000;H=0x100200;mem=bytearray(0x20000)
             def put(address,data):mem[address-BASE:address-BASE+len(data)]=data

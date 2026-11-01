@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.0 — 2026-11-01
+
+- **Finds Damage by itself on any new game build, quickly.** After a game patch there is no learning wait and no saved layout needed: the trainer scans for the stat block by its fixed field pattern (health, damage, haste, crit, crit damage, speed, pickup, experience) next to a text header, tells the live copy from stale ones by nudging Damage 1% (the game recalculates the live one), and pins Damage at once. It remembers where it found it, so a watcher restart in the same game takes about 4 seconds; a cold start on a patched build takes about 10 to 30 seconds. Verified live on build `eb7447…`.
+- **Only Damage** is applied this way for now. Other stats are added one at a time as each is proven safe.
+- Older builds that were learned before keep their full stat set.
+- Tests: 57.
+
 ## 1.8.2 — 2026-11-01
 
 - **Damage works on game build `eb7447…`.** Only Damage is applied on that build for now: it is pinned at your target every 20 ms (the game recalculates it every couple of seconds). Verified live through the trainer itself: state *applying*, Damage held at +9999% on the character sheet, game responsive. The other stats there stay off until each is proven safe, one at a time.

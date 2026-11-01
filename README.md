@@ -134,7 +134,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **Max talents use a signed copy of your save.** The trainer finds the game's own save key inside the game file and accepts it only if it authenticates your current save; it refuses to write anything if the game's talent table does not match the talents already in your save. It never edits `characters.txt` itself.
 - **Talent cap:** it is applied to the running game only, so it is applied again every time the game starts while *Raise talent cap* is ticked. The small "51 at most" text on the talents screen is a fixed label and keeps saying 51; the points you can spend are what change. Reopen the Talents tab after applying so the screen redraws. Each game update can move the code the cap lives in; the trainer finds it again from the game file and refuses to touch the game if what it finds does not fit.
 - **Not covered:** lives, thorns, lifesteal and pet damage. Lives, thorns and lifesteal were not found as editable values at all in the character's data (they appear to exist only once you own something that grants them); pet damage is simply not applied. Vs elites and DoT stacks are covered, but the game resets them whenever the trainer is not running, so keep the watcher running.
-- **Newest game build (`eb7447…`):** only **Damage** is applied so far. The other stats are added one at a time once each is proven safe (a first test that wrote many at once froze and then crashed the game).
+- **New or patched game builds:** the trainer finds your character by its stat pattern within seconds (no setup, no waiting for a level-up) and applies **Damage** first. The other stats are added one at a time once each is proven safe (a first test that wrote many at once froze and then crashed the game).
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.
 
@@ -160,7 +160,7 @@ python build_exe.py --console  # console build, handy for testing commands
 ```
 
 ```bash
-python game.py self-test    # 55 tests, no game required
+python game.py self-test    # 57 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.
