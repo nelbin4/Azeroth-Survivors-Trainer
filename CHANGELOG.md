@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.2 — 2026-11-01
+
+- **Removed "Find talent spots".** Running it on the current game build crashed the game twice with the same heap-corruption error: it temporarily changed the number 51 to 150 in candidate instructions, and the very first candidates are loop and table bounds, not a talent cap. The talent cap itself (Apply / Restore) stays, but it only works for game builds whose three code spots are known; the current build is not one of them.
+
 ## 1.4.1 — 2026-11-01
 
 - Talent cap: a clear message when Windows refuses to let the trainer change the game's code (seen on build `71e5f176…`). The README and technical notes say the feature may not work on the newest game build.

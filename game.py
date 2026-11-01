@@ -19,7 +19,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.4.1'
+VERSION = '1.4.2'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2226,7 +2226,7 @@ def restart_after_update():
 
 TALENT_ORIGINAL = 51
 TALENT_DEFAULT_CAP = 150
-# From the original talent_150.py (a different, older build); a build learned with "Find talent spots" is stored in session.json instead.
+# From the original talent_150.py (an older build). Sites for other builds can be stored in session.json under learned_builds[<hash>]['talent_sites'].
 KNOWN_TALENT_SITES = {'e8ff033544095e81d74087ff400d50286b26af02291e649f4c5e4d76cbcf8863': [
     dict(rva=0x5B7D447, original='bf33000000'), dict(rva=0x5B7E4E4, original='b833000000'), dict(rva=0x5B8E8C1, original='41b933000000')]}
 
@@ -2239,27 +2239,6 @@ def talent_patch_bytes(original_hex, cap):
     if len(raw) < offset + 4 or struct.unpack_from('<I', raw, offset)[0] != TALENT_ORIGINAL:raise ValueError('That instruction does not load 51.')
     if not 1 <= cap <= 999:raise ValueError('Talent cap must be 1 to 999.')
     struct.pack_into('<I', raw, offset, cap);return bytes(raw)
-
-def find_talent_candidates(code, base_rva=0):
-    """Every 'mov reg, 51' in the code bytes, minus text-length constants (a pointer load right before the constant)."""
-    import re
-    found = []
-    for match in re.finditer(rb'(?:\x41)?[\xb8-\xbf]\x33\x00\x00\x00', code, re.S):
-        before = code[max(0, match.start() - 12):match.start()]
-        if re.search(rb'[\x48\x4c]\x8d[\x05\x0d\x15\x1d\x25\x2d\x35\x3d].{4}.{0,4}$', before, re.S):continue
-        found.append(dict(rva=base_rva + match.start(), original=match.group().hex()))
-    return found
-
-def read_text_section(exe):
-    """(code bytes, RVA) of the .text section of the game file on disk."""
-    data = Path(exe).read_bytes()
-    pe = struct.unpack_from('<I', data, 0x3c)[0];count = struct.unpack_from('<H', data, pe + 6)[0];optional = struct.unpack_from('<H', data, pe + 20)[0]
-    offset = pe + 24 + optional
-    for _ in range(count):
-        name = data[offset:offset + 8].rstrip(b'\0').decode(errors='replace');size, rva, raw_size, raw = struct.unpack_from('<IIII', data, offset + 8)
-        if name == '.text':return data[raw:raw + raw_size], rva
-        offset += 40
-    raise RuntimeError('No .text section in the game file.')
 
 def talent_sites_for(data, digest):
     learned = data.get('learned_builds', {}).get(digest.lower(), {}).get('talent_sites')
@@ -2325,33 +2304,6 @@ def set_talent_cap(code, base, sites, cap):
         raise
     return len(plan)
 
-def read_talent_cap(lines):
-    """The cap from the talents screen, or None when that screen is not showing. The game prints
-    "51 of 51 earned ... 51 at most"; older wording was "X of Y points"."""
-    import re
-    for pattern in (r'(\d+)\s*at most', r'\d+\s*of\s*(\d+)\s*earned', r'\d+\s*(?:of|/)\s*(\d+)\s*points?'):
-        for *_, text in lines:
-            found = re.search(pattern, text, re.I)
-            if found:return int(found.group(1))
-    return None
-
-def learn_talent_sites(code, base, candidates, read_cap, alive, cap=TALENT_DEFAULT_CAP, progress=lambda *a: None, settle=.6):
-    """Try each candidate alone: patch it, see whether the talents screen's cap changes, and always put the original back."""
-    baseline = read_cap()
-    if baseline != TALENT_ORIGINAL:raise RuntimeError(f'Open the talents screen first (it should read "... of {TALENT_ORIGINAL} points"; it read {baseline}).')
-    hits = []
-    for number, candidate in enumerate(candidates, 1):
-        if not alive():raise RuntimeError('The game closed during the search.')
-        original = bytes.fromhex(candidate['original']);address = base + candidate['rva']
-        if code.read(address, len(original)) != original:continue
-        code.write_code(address, talent_patch_bytes(candidate['original'], cap))
-        try:
-            time.sleep(settle);value = read_cap()
-        finally:code.write_code(address, original)
-        if value == cap:hits.append(candidate)
-        progress(number, len(candidates), len(hits))
-    return hits
-
 TALENT_CACHE = {}
 
 def talents_target(data):
@@ -2371,29 +2323,15 @@ def talents_target(data):
 
 def talents_apply(cap):
     data = read();process, base, sites, digest = talents_target(data)
-    if not sites:raise RuntimeError('This game version has no known talent spots yet. Use "Find talent spots" with the talents screen open.')
+    if not sites:raise RuntimeError('The talent cap is not available for this game version: its code spots are not known.')
     with ProcessCode(process.pid) as code:return set_talent_cap(code, base, sites, cap)
-
-def talents_find(progress=lambda *a: None):
-    data = read();process, base, _, digest = talents_target(data)
-    candidates, rva = read_text_section(process.exe());candidates = find_talent_candidates(candidates, rva)
-    handle = game_window(process.pid)
-    if not handle:raise RuntimeError('Game window not found.')
-    def read_cap():
-        path = shot_path('talents');capture_window(handle, path);return read_talent_cap(ocr_lines(path))
-    with ProcessCode(process.pid) as code:
-        hits = learn_talent_sites(code, base, candidates, read_cap, lambda: psutil.pid_exists(process.pid), progress=progress)
-    if hits:update_session(lambda d: d.setdefault('learned_builds', {}).setdefault(digest, {}).update(talent_sites=hits))
-    return hits, len(candidates)
 
 def talents_command():
     parser = argparse.ArgumentParser(description='Change the talent point cap in the running game (memory only; re-apply after a restart).')
-    parser.add_argument('action', choices=['apply', 'restore', 'status', 'find'])
+    parser.add_argument('action', choices=['apply', 'restore', 'status'])
     parser.add_argument('--cap', type=int, default=TALENT_DEFAULT_CAP)
     args = parser.parse_args(sys.argv[2:])
-    if args.action == 'find':
-        hits, total = talents_find(lambda n, t, h: print(f'  tested {n}/{t}, found {h}', end='\r', flush=True));print(f'\nFound {len(hits)} spot(s) among {total} candidates.')
-    elif args.action == 'status':
+    if args.action == 'status':
         data = read();process, base, sites, digest = talents_target(data)
         with ProcessCode(process.pid) as code:print(json.dumps(dict(build=digest, known_spots=len(sites), state=talent_state(code, base, sites) if sites else None)))
     else:print(f"{'Patched' if args.action == 'apply' else 'Restored'} {talents_apply(args.cap if args.action == 'apply' else TALENT_ORIGINAL)} spot(s).")
@@ -2506,7 +2444,6 @@ class WatcherWindow:
         ttk.Entry(first,textvariable=self.talent_cap,width=6).pack(side='left',padx=6)
         ttk.Button(first,text='Apply',command=self.talent_apply).pack(side='left')
         ttk.Button(first,text=f'Restore {TALENT_ORIGINAL}',command=self.talent_restore).pack(side='left',padx=6)
-        self.talent_find_button=ttk.Button(first,text='Find talent spots',command=self.talent_find);self.talent_find_button.pack(side='left')
         self.talent_status=tk.StringVar(value='');ttk.Label(card,textvariable=self.talent_status,foreground='#444444').pack(anchor='w',padx=8)
         self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
         ttk.Checkbutton(card,text='Apply when the game starts',variable=self.talent_auto,command=lambda:update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))).pack(anchor='w',padx=8,pady=(0,4))
@@ -2544,7 +2481,7 @@ class WatcherWindow:
     def describe_talents(self,data):
         try:process,base,sites,digest=talents_target(data)
         except Exception:return 'Start the game to use talents.'
-        if not sites:return 'This game version has no known talent spots yet: use Find talent spots.'
+        if not sites:return 'Talent cap is not available for this game version (its code spots are not known).'
         try:
             with ProcessCode(process.pid) as code:patched,total,cap=talent_state(code,base,sites)
         except Exception as error:return f'Talent spots could not be read ({error}).'
@@ -2563,13 +2500,6 @@ class WatcherWindow:
         def work():
             count=talents_apply(TALENT_ORIGINAL);self.root.after(0,lambda:self.say(f'Talent cap restored to {TALENT_ORIGINAL} ({count} spot(s)).'))
         self.run_task(work,'Restoring the talent cap...')
-    def talent_find(self):
-        from tkinter import messagebox
-        if not messagebox.askokcancel(APP_NAME,'Find talent spots tests candidate places in the game one at a time, restoring each straight away. It needs the talents screen open and takes a few minutes. A mistake could crash the game, so do it in a run you do not mind losing.\n\nContinue?'):return
-        def work():
-            hits,total=talents_find(lambda n,t,h:self.root.after(0,lambda:self.talent_status.set(f'Searching: {n} of {t} tested, {h} found')))
-            self.root.after(0,lambda:self.say(f'Talent search finished: {len(hits)} spot(s) found among {total} candidates.'))
-        self.run_task(work,'Searching for talent spots (keep the talents screen open)...')
     def commit_target(self,name,offset,fmt,var):
         current=next((t[3] for t in read()['config']['targets'] if t[0]==name),None)
         try:value=parse_target(var.get(),offset,fmt)
@@ -2886,31 +2816,6 @@ def self_test():
             code2.write_code=failing;snapshot=bytes(memory2)
             with self.assertRaises(OSError):set_talent_cap(code2,0,sites2,150)
             self.assertEqual(bytes(memory2),snapshot)  # the two spots already written were rolled back
-        def test_candidates_skip_text_length_constants(self):
-            string_pair=bytes.fromhex('488d05ba1c8704')+bytes.fromhex('ba33000000')+b'\xc3'
-            real=bytes.fromhex('90909090')+bytes.fromhex('bf33000000')+bytes.fromhex('e800000000')
-            found=find_talent_candidates(string_pair+b'\xcc\xcc'+real,1000)
-            self.assertEqual([c['original'] for c in found],['bf33000000'])
-            self.assertEqual(found[0]['rva'],1000+len(string_pair)+2+4)
-        def test_talent_cap_is_read_from_the_points_text(self):
-            self.assertEqual(read_talent_cap([(0,0,1,1,'TALENTS'),(0,0,1,1,'51 of 51 points')]),51)
-            self.assertEqual(read_talent_cap([(0,0,1,1,'51 of 150 Points')]),150)
-            self.assertEqual(read_talent_cap([(0,0,1,1,'51 of 51 earned spent · 18/17/16 · 51 at most')]),51)
-            self.assertEqual(read_talent_cap([(0,0,1,1,'51 of 150 earned spent · 18/17/16 · 150 at most')]),150)
-            self.assertEqual(read_talent_cap([(0,0,1,1,'20 points · Hot Streak'),(0,0,1,1,'Every talent point earned.')]),None)
-            self.assertIsNone(read_talent_cap([(0,0,1,1,'Collection'),(0,0,1,1,'Codex')]))
-        def test_learning_finds_the_spot_that_changes_the_screen_and_restores_everything(self):
-            code,sites,memory=self.talent_memory()
-            decoy=dict(rva=700,original='bf33000000');memory[700:705]=bytes.fromhex('bf33000000')
-            shown=lambda:struct.unpack_from('<I',memory,101)[0]   # the display lives at the first spot only
-            before=bytes(memory);progress=[]
-            hits=learn_talent_sites(code,0,[decoy]+sites,shown,lambda:True,progress=lambda *a:progress.append(a),settle=0)
-            self.assertEqual([h['rva'] for h in hits],[100]);self.assertEqual(bytes(memory),before);self.assertEqual(progress[-1],(4,4,1))
-        def test_learning_refuses_when_the_talents_screen_is_not_open_or_the_game_dies(self):
-            code,sites,memory=self.talent_memory()
-            with self.assertRaises(RuntimeError):learn_talent_sites(code,0,sites,lambda:None,lambda:True,settle=0)
-            self.assertEqual(code.writes,0)
-            with self.assertRaises(RuntimeError):learn_talent_sites(code,0,sites,lambda:51,lambda:False,settle=0)
         def test_known_build_sites_come_from_the_old_script_and_learned_ones_win(self):
             known=next(iter(KNOWN_TALENT_SITES))
             self.assertEqual(len(talent_sites_for({},known.upper())),3);self.assertEqual(talent_sites_for({},'0'*64),[])
@@ -3164,7 +3069,7 @@ if __name__ == '__main__':
         elif command in ('--help','-h','help'):
             print('setup --game PATH --name NAME (first time) | Preferred: (no arguments) = window | --background = silent watcher | auto | new-game [--apply] | status | stop')
             print('Manual: resolve-name | discover-name --name <character> | named-core --seconds 600 --background')
-            print('Diagnostics: talents apply|restore|status|find | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
+            print('Diagnostics: talents apply|restore|status | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
             print('Each argument-based command accepts --help. Legacy start/apply-host were removed (they paused the game).')
         elif command in ('start','_worker','apply-host'):
             raise RuntimeError('Legacy process-pausing commands were removed. Use: auto --background')
