@@ -8,6 +8,7 @@ import sys
 import time
 import argparse
 import hashlib
+import hmac
 import math
 import uuid
 import ctypes
@@ -19,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2386,6 +2387,145 @@ def talents_command():
         with ProcessCode(process.pid) as code:print(json.dumps(dict(build=digest, spots=len(sites), patched_cap=talent_state(code, base, sites))))
     else:print(f"{'Patched' if args.action == 'apply' else 'Restored'} {talents_apply(args.cap if args.action == 'apply' else TALENT_ORIGINAL)} spot(s).")
 
+CLASS_NAMES = {1: 'Warrior', 2: 'Paladin', 3: 'Hunter', 4: 'Rogue', 5: 'Priest', 7: 'Shaman', 8: 'Mage', 9: 'Warlock', 11: 'Druid'}
+CLASS_ORDER = (1, 2, 3, 4, 5, 7, 8, 9, 11)  # the order the game's talent table lists them in (three trees each)
+SAVE_KEY_PREFIX = b'azeroth-survivors/sa'
+
+def pe_layout(data):
+    """(image base, {section name: (rva, virtual size, raw offset, raw size)}) of a 64-bit Windows executable."""
+    pe = struct.unpack_from('<I', data, 0x3c)[0];count = struct.unpack_from('<H', data, pe + 6)[0];optional = struct.unpack_from('<H', data, pe + 20)[0]
+    image = struct.unpack_from('<Q', data, pe + 24 + 24)[0];offset = pe + 24 + optional;sections = {}
+    for _ in range(count):
+        name = data[offset:offset + 8].rstrip(b'\0').decode(errors='replace');size, rva, raw_size, raw = struct.unpack_from('<IIII', data, offset + 8)
+        sections[name] = (rva, size, raw, raw_size);offset += 40
+    return image, sections
+
+def split_talent_runs(records):
+    """The talent table is one array of equally sized records; each tree is an unbroken run of them."""
+    runs = []
+    for record in sorted(records, key=lambda r: r['rva']):
+        if runs and record['rva'] - runs[-1][-1]['rva'] == 0xB0:runs[-1].append(record)
+        else:runs.append([record])
+    return [run for run in runs if len(run) >= 10]
+
+def assign_talent_classes(runs):
+    """{class id: [[(talent id, max rank), ...] per tree]}; refuses anything that is not 3 trees per known class."""
+    if len(runs) != 3 * len(CLASS_ORDER):raise RuntimeError(f'Expected {3 * len(CLASS_ORDER)} talent trees in the game file, found {len(runs)}. This game version is not supported.')
+    table = {}
+    for number, class_id in enumerate(CLASS_ORDER):
+        trees = [[(t['id'], (t['packed'] >> 16) & 255) for t in run] for run in runs[number * 3:number * 3 + 3]]
+        if any(not 1 <= rank <= 5 for tree in trees for _, rank in tree):raise RuntimeError('A talent has an impossible maximum rank. This game version is not supported.')
+        table[class_id] = trees
+    return table
+
+def read_talent_table(exe):
+    """Every talent of every class with its maximum rank, read from the game file (never from the running game)."""
+    import numpy as np
+    data = Path(exe).read_bytes();image, sections = pe_layout(data);rva, size, raw, raw_size = sections['.rdata'];pool = data[raw:raw + raw_size]
+    words = np.frombuffer(pool[:len(pool) // 8 * 8], dtype='<u8');index = np.arange(0, len(words) - 30)
+    inside = lambda w: (w >= image + rva) & (w < image + rva + raw_size)
+    mask = (words[index + 1] >= 1) & (words[index + 1] <= 40) & (words[index + 3] >= 1) & (words[index + 3] <= 40) & (words[index + 5] >= 1) & (words[index + 5] <= 60) & inside(words[index]) & inside(words[index + 2]) & inside(words[index + 4])
+    def text(pointer, length):
+        start = int(pointer) - image - rva;return pool[start:start + int(length)]
+    records = []
+    for k in index[mask]:
+        identifier, icon = text(words[k], words[k + 1]), text(words[k + 4], words[k + 5])
+        if identifier and identifier.replace(b'_', b'').isalnum() and icon.startswith((b'Spell_', b'Ability_', b'INV_')):
+            records.append(dict(rva=rva + int(k) * 8, id=identifier.decode(), packed=struct.unpack_from('<I', pool, (int(k) + 13) * 8)[0]))
+    return assign_talent_classes(split_talent_runs(records))
+
+def rse1_crypt(key, header, data):
+    out = bytearray(data)
+    for start in range(0, len(data), 20):
+        stream = hmac.new(key, b'ks' + header + struct.pack('<Q', start // 20), hashlib.sha1).digest()
+        for i in range(min(20, len(data) - start)):out[start + i] ^= stream[i]
+    return bytes(out)
+
+def rse1_unseal(key, text):
+    """The game's save envelope: RSE1: + base64(16-byte header, XOR ciphertext, 20-byte HMAC-SHA1 tag). Raises ValueError if the tag does not match."""
+    import base64
+    if not text.startswith('RSE1:'):raise ValueError('Not an RSE1 save.')
+    raw = base64.b64decode(text[5:], validate=True);header, cipher, tag = raw[:16], raw[16:-20], raw[-20:]
+    if not hmac.compare_digest(hmac.new(key, b'tag' + header + cipher, hashlib.sha1).digest(), tag):raise ValueError('Tag mismatch.')
+    return rse1_crypt(key, header, cipher).decode('utf-8')
+
+def rse1_seal(key, plain):
+    import base64, secrets
+    header = secrets.token_bytes(16);cipher = rse1_crypt(key, header, plain.encode('utf-8'))
+    return 'RSE1:' + base64.b64encode(header + cipher + hmac.new(key, b'tag' + header + cipher, hashlib.sha1).digest()).decode()
+
+def find_save_key(blob, sealed_text):
+    """The save key is a constant inside the game file (starting with a fixed prefix, sometimes stored XOR 0x36). Only a
+    candidate that authenticates the player's own save is accepted, so nothing is guessed."""
+    for mask in (0x36, 0):
+        needle = bytes(x ^ mask for x in SAVE_KEY_PREFIX);start = 0
+        while True:
+            at = blob.find(needle, start)
+            if at < 0:break
+            block = bytes(x ^ mask for x in blob[at:at + 64])
+            for end in range(len(SAVE_KEY_PREFIX), len(block) + 1):
+                if end == len(block) or all(x == 0 for x in block[end:(end // 16 + 1) * 16]):
+                    try:rse1_unseal(block[:end], sealed_text);return block[:end]
+                    except ValueError:pass
+                    break
+            start = at + 1
+    raise RuntimeError('Could not find the save key in the game file; this game version is not supported.')
+
+def max_alloc(trees):
+    return ','.join(f'{name}:{rank}' for tree in trees for name, rank in tree)
+
+def check_table_against_save(plain, table):
+    """Every talent already in the save must belong to the class the table says it does; otherwise the table is wrong."""
+    for line in plain.split('\n'):
+        parts = line.split('|')
+        if parts[0] == 'talent' and len(parts) > 3 and parts[3] and parts[1].isdigit() and int(parts[1]) in table:
+            known = {name for tree in table[int(parts[1])] for name, _ in tree}
+            for item in parts[3].split(','):
+                if item.split(':')[0] not in known:raise RuntimeError(f"The save has a talent ({item.split(':')[0]}) the game table does not list for class {parts[1]}. Nothing was changed.")
+
+def edit_talents(plain, table, class_ids):
+    """Set every talent of the chosen classes to its maximum, in both the active allocation and the Spec 1 preset; all other lines stay as they are."""
+    lines = plain.split('\n');done = set()
+    for number, line in enumerate(lines):
+        parts = line.split('|')
+        for class_id in class_ids:
+            if parts[0] == 'talent' and len(parts) >= 4 and parts[1] == str(class_id):
+                lines[number] = '|'.join(parts[:3] + [max_alloc(table[class_id])]);done.add(('talent', class_id))
+            elif parts[0] == 'spec' and len(parts) >= 4 and parts[1] == str(class_id):
+                lines[number] = '|'.join(parts[:3] + [max_alloc(table[class_id])] + parts[4:]);done.add(('spec', class_id))
+    missing = [class_id for class_id in class_ids if ('talent', class_id) not in done]
+    if missing:raise RuntimeError(f'The save has no talent record for class {missing[0]}. Nothing was changed.')
+    return '\n'.join(lines)
+
+def save_folder():
+    folder = Path(os.environ.get('APPDATA', '')) / 'wenilla-rogue'
+    if not (folder / 'characters.txt').is_file():raise RuntimeError(f'Your game save was not found ({folder / "characters.txt"}). Start the game once first.')
+    return folder
+
+def create_max_talent_save(selection):
+    """selection: a class id or 'all'. Writes a new importable save with every talent at its maximum, after backing up the current one."""
+    data = read();exe = Path(data['game_exe']);folder = save_folder()
+    current = (folder / 'characters.txt').read_text(encoding='utf-8').strip()
+    key = find_save_key(exe.read_bytes(), current);plain = rse1_unseal(key, current);table = read_talent_table(exe)
+    check_table_against_save(plain, table)
+    class_ids = list(CLASS_ORDER) if selection == 'all' else [selection]
+    edited = edit_talents(plain, table, class_ids);sealed = rse1_seal(key, edited)
+    if rse1_unseal(key, sealed) != edited:raise RuntimeError('The new save did not verify. Nothing was written.')
+    saves = folder / 'Saves';saves.mkdir(exist_ok=True)
+    backup = saves / f"AzerothSurvivors-before-max-talents-{time.strftime('%Y%m%d-%H%M%S')}.sav";backup.write_text(current, encoding='utf-8')
+    label = 'all' if selection == 'all' else CLASS_NAMES[selection].lower()
+    out = saves / f'AzerothSurvivors-max-talents-{label}.sav';out.write_text(sealed, encoding='utf-8')
+    points = {class_id: sum(rank for tree in table[class_id] for _, rank in tree) for class_id in class_ids}
+    return dict(path=out, backup=backup, classes=class_ids, talents=sum(len(tree) for c in class_ids for tree in table[c]), points=points)
+
+def max_talents_command():
+    parser = argparse.ArgumentParser(description='Write an importable save with every talent at its maximum (backs up your current save first). Import it in the game: Options > Saves > Import Save.')
+    parser.add_argument('--class', dest='klass', default='all', choices=['all'] + [n.lower() for n in CLASS_NAMES.values()])
+    args = parser.parse_args(sys.argv[2:])
+    selection = 'all' if args.klass == 'all' else next(c for c, n in CLASS_NAMES.items() if n.lower() == args.klass)
+    info = create_max_talent_save(selection)
+    print(f"Saved {info['path']}\n{info['talents']} talents, points per class: " + ', '.join(f'{CLASS_NAMES[c]} {p}' for c, p in info['points'].items()) + f"\nBackup of your current save: {info['backup']}\nApply the talent cap first (python game.py talents apply), then import in the game: Options > Saves > Import Save.")
+
 def configure(game_exe,name):
     """Create or update session.json for this machine: game path and character name."""
     exe=Path(game_exe)
@@ -2451,6 +2591,11 @@ def describe_state(monitor,state):
     if state in ('applying','waiting_progress') and monitor.get('trace_only'):text='Observe only: reading your character without changing anything.'
     return text
 
+STATE_TITLES = {'starting': 'Starting up', 'waiting_process': 'Waiting for the game', 'in_menu': 'In the menu', 'in_lobby': 'In the lobby',
+                'seeking_record': 'Looking for your character', 'waiting_progress': 'Waiting for you to level up', 'applying': 'Applying your stats',
+                'learning': 'Learning this game version', 'learned': 'Learned this game version', 'recovering': 'Reconnecting',
+                'blocked_ambiguous': 'Which character is yours?', 'blocked': 'Blocked', 'failed': 'Stopped by a problem', 'expired': 'Timed out', 'stopped': 'Stopped'}
+
 def parse_target(text,offset,fmt):
     """Validate a target typed in the window. Raises ValueError for anything the watcher would refuse."""
     value=float(str(text).replace(',','').strip())
@@ -2462,53 +2607,71 @@ def parse_target(text,offset,fmt):
         return int(value)
     return value
 
+class Disclosure:
+    """A one-line section header that expands to show its body."""
+    def __init__(self,parent,title,summary,build,opened=False):
+        import tkinter as tk
+        from tkinter import ttk
+        self.title=title;self.opened=False;self.summary=tk.StringVar(value=summary)
+        self.frame=ttk.Frame(parent);header=ttk.Frame(self.frame);header.pack(fill='x')
+        self.label=ttk.Label(header,text='\u25b8  '+title,cursor='hand2');self.label.pack(side='left',padx=12,pady=7)
+        side=ttk.Label(header,textvariable=self.summary,foreground='#6b6b6b');side.pack(side='right',padx=12)
+        self.body=ttk.Frame(self.frame);build(self.body)
+        for widget in (header,self.label,side):widget.bind('<Button-1>',lambda e:self.toggle())
+        if opened:self.toggle()
+    def toggle(self):
+        self.opened=not self.opened
+        if self.opened:self.body.pack(fill='both',expand=True,padx=12,pady=(0,8))
+        else:self.body.pack_forget()
+        self.label.configure(text=('\u25be  ' if self.opened else '\u25b8  ')+self.title)
+
 class WatcherWindow:
-    """Small Tk front end: starts/stops the background watcher and shows its state and live values."""
+    """Small Tk front end: one status card with Start/Stop, the talents box, and folded sections for stats, log and settings."""
     COLORS={'in_lobby':'#1565c0','in_menu':'#6b6b6b','applying':'#2e7d32','waiting_progress':'#b26a00','learning':'#1565c0','learned':'#1565c0','seeking_record':'#6b6b6b','blocked':'#c62828','blocked_ambiguous':'#c62828','recovering':'#c62828','waiting_process':'#6b6b6b','stopped':'#6b6b6b','expired':'#6b6b6b','failed':'#c62828'}
     def __init__(self,root):
         import tkinter as tk
         from tkinter import ttk
-        self.tk=tk;self.ttk=ttk;self.root=root;self.last_state=None;self.digest=None;self.memory=None;self.mem_pid=None;self.busy=False
-        root.title(APP_NAME);root.geometry('560x660');root.minsize(520,560)
-        pad=dict(padx=12,pady=6)
-        head=ttk.Frame(root);head.pack(fill='x',**pad)
-        self.state=tk.StringVar(value='...');self.char=tk.StringVar(value='-');self.proc=tk.StringVar(value='-')
-        for col,(label,var) in enumerate((('State',self.state),('Character',self.char),('Game process',self.proc))):
-            box=ttk.LabelFrame(head,text=label);box.grid(row=0,column=col,sticky='nsew',padx=4);head.columnconfigure(col,weight=1)
-            lab=ttk.Label(box,textvariable=var,font=('Segoe UI',11,'bold'));lab.pack(padx=8,pady=6,anchor='w')
-            if col==0:self.state_label=lab
-        ttk.Label(root,text="For solo or host runs only. Do not use when joining someone else's game.",foreground='#b26a00').pack(anchor='w',padx=12)
-        self.status=tk.StringVar(value='');ttk.Label(root,textvariable=self.status,wraplength=520,foreground='#444444').pack(anchor='w',padx=16)
-        ctl=ttk.Frame(root);ctl.pack(fill='x',**pad)
-        ttk.Button(ctl,text="What's new",command=self.whats_new).pack(side='right')
-        ttk.Button(ctl,text='Start',command=self.start).pack(side='left')
-        ttk.Button(ctl,text='Stop',command=self.stop).pack(side='left',padx=6)
-        self.mode=tk.StringVar(value='write')
-        ttk.Label(ctl,text='Mode').pack(side='left',padx=(24,6))
-        ttk.Radiobutton(ctl,text='Observe only',variable=self.mode,value='observe').pack(side='left')
-        ttk.Radiobutton(ctl,text='Write',variable=self.mode,value='write').pack(side='left',padx=6)
-        card=ttk.LabelFrame(root,text='Talents');card.pack(fill='x',padx=12,pady=(2,6))
-        first=ttk.Frame(card);first.pack(fill='x',padx=8,pady=(4,0))
-        ttk.Label(first,text=f'Talent point cap  {TALENT_ORIGINAL} ->').pack(side='left')
+        self.tk=tk;self.ttk=ttk;self.root=root;self.last_state=None;self.digest=None;self.memory=None;self.mem_pid=None;self.busy=False;self.alive=False
+        root.title(APP_NAME);root.minsize(500,0)
+        card=ttk.Frame(root,padding=(14,12),relief='groove');card.pack(fill='x',padx=12,pady=(12,6))
+        self.dot=tk.Canvas(card,width=14,height=14,highlightthickness=0);self.dot_id=self.dot.create_oval(2,2,12,12,fill='#6b6b6b',outline='');self.dot.pack(side='left',padx=(0,10))
+        text=ttk.Frame(card);text.pack(side='left',fill='x',expand=True)
+        self.headline=tk.StringVar(value='...');self.sub=tk.StringVar(value='')
+        ttk.Label(text,textvariable=self.headline,font=('Segoe UI',12,'bold')).pack(anchor='w')
+        ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=330).pack(anchor='w')
+        self.toggle_button=ttk.Button(card,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='right')
+        modes=ttk.Frame(root);modes.pack(fill='x',padx=14,pady=(0,8))
+        self.mode=tk.StringVar(value='write');ttk.Label(modes,text='Mode').pack(side='left')
+        ttk.Radiobutton(modes,text='Write',variable=self.mode,value='write').pack(side='left',padx=(8,4))
+        ttk.Radiobutton(modes,text='Observe only',variable=self.mode,value='observe').pack(side='left')
+        box=ttk.LabelFrame(root,text='Talents');box.pack(fill='x',padx=12,pady=(0,8))
+        first=ttk.Frame(box);first.pack(fill='x',padx=8,pady=(6,2))
+        ttk.Label(first,text='Point cap').pack(side='left')
         self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
         ttk.Entry(first,textvariable=self.talent_cap,width=6).pack(side='left',padx=6)
         ttk.Button(first,text='Apply',command=self.talent_apply).pack(side='left')
-        ttk.Button(first,text=f'Restore {TALENT_ORIGINAL}',command=self.talent_restore).pack(side='left',padx=6)
-        self.talent_status=tk.StringVar(value='');ttk.Label(card,textvariable=self.talent_status,foreground='#444444').pack(anchor='w',padx=8)
-        self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
-        ttk.Checkbutton(card,text='Apply when the game starts',variable=self.talent_auto,command=lambda:update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))).pack(anchor='w',padx=8,pady=(0,4))
-        self.updates=tk.BooleanVar(value=read().get('auto_update',True))
-        ttk.Checkbutton(root,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w',padx=12)
-        ttk.Label(root,text='Stats on the character (tick = included)').pack(anchor='w',padx=12)
-        table=ttk.Frame(root);table.pack(fill='both',expand=True,padx=12,pady=4)
-        canvas=tk.Canvas(table,highlightthickness=0,height=250);bar=ttk.Scrollbar(table,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
-        bar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
-        self.rows=ttk.Frame(canvas);canvas.create_window((0,0),window=self.rows,anchor='nw')
-        self.rows.bind('<Configure>',lambda e:canvas.configure(scrollregion=canvas.bbox('all')))
-        self.field_vars={};self.live_vars={};self.build_rows()
-        ttk.Label(root,text='Log').pack(anchor='w',padx=12)
-        self.log=tk.Text(root,height=7,state='disabled',font=('Consolas',9));self.log.pack(fill='x',padx=12,pady=4)
-        self.foot=tk.StringVar();ttk.Label(root,textvariable=self.foot).pack(anchor='w',padx=12,pady=(0,8))
+        ttk.Button(first,text='Restore',command=self.talent_restore).pack(side='left',padx=6)
+        self.talent_status=tk.StringVar(value='');ttk.Label(first,textvariable=self.talent_status,foreground='#2e7d32').pack(side='right')
+        second=ttk.Frame(box);second.pack(fill='x',padx=8,pady=(6,2))
+        ttk.Label(second,text='Max talents for').pack(side='left')
+        names=['All classes']+[CLASS_NAMES[c] for c in CLASS_ORDER]
+        self.class_choice=ttk.Combobox(second,values=names,state='readonly',width=14);self.class_choice.set(read().get('max_talent_class','All classes'))
+        if self.class_choice.get() not in names:self.class_choice.set('All classes')
+        self.class_choice.pack(side='left',padx=6)
+        ttk.Button(second,text='Create save',command=self.max_talents_create).pack(side='left')
+        ttk.Button(second,text='Open Saves folder',command=self.open_saves).pack(side='left',padx=6)
+        self.save_status=tk.StringVar(value='Then in the game: Options > Saves > Import Save. Apply the cap first.')
+        ttk.Label(box,textvariable=self.save_status,foreground='#555555',wraplength=470).pack(anchor='w',padx=8,pady=(2,8))
+        self.field_vars={};self.live_vars={}
+        targets=read()['config']['targets']
+        self.sections=[]
+        for title,summary,build in (('Stats and targets',f'{len(targets)} fields',self.build_stats),('Log','',self.build_log),('Settings','updates, startup',self.build_settings)):
+            ttk.Separator(root).pack(fill='x',padx=12);section=Disclosure(root,title,summary,build);section.frame.pack(fill='x');self.sections.append(section)
+        ttk.Separator(root).pack(fill='x',padx=12)
+        foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(6,10))
+        ttk.Button(foot,text="What's new",command=self.whats_new).pack(side='left')
+        self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left',padx=10)
+        ttk.Label(foot,text='Solo or host only',foreground='#b26a00').pack(side='right')
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
         notice=read().get('update_notice')
@@ -2528,6 +2691,35 @@ class WatcherWindow:
             target=self.tk.StringVar(value=f'{value:g}')
             entry=ttk.Entry(self.rows,textvariable=target,width=11,state='disabled' if offset==20 else 'normal');entry.grid(row=row,column=3,sticky='w',padx=6)
             for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e,n=name,o=offset,f=fmt,v=target:self.commit_target(n,o,f,v))
+    def build_stats(self,body):
+        tk=self.tk;ttk=self.ttk
+        canvas=tk.Canvas(body,highlightthickness=0,height=230,width=470);bar=ttk.Scrollbar(body,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
+        bar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
+        self.rows=ttk.Frame(canvas);canvas.create_window((0,0),window=self.rows,anchor='nw')
+        self.rows.bind('<Configure>',lambda e:canvas.configure(scrollregion=canvas.bbox('all')))
+        self.build_rows()
+    def build_log(self,body):
+        self.log=self.tk.Text(body,height=7,state='disabled',font=('Consolas',9));self.log.pack(fill='x')
+    def build_settings(self,body):
+        ttk=self.ttk;tk=self.tk
+        self.updates=tk.BooleanVar(value=read().get('auto_update',True))
+        ttk.Checkbutton(body,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w')
+        self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
+        ttk.Checkbutton(body,text='Apply the talent cap when the game starts',variable=self.talent_auto,command=lambda:update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))).pack(anchor='w')
+    def toggle_run(self):
+        if self.alive:self.stop()
+        else:self.start()
+    def open_saves(self):
+        try:os.startfile(save_folder()/'Saves')
+        except Exception as error:self.say(f'Could not open the Saves folder: {error}')
+    def max_talents_create(self):
+        choice=self.class_choice.get();selection='all' if choice=='All classes' else next(c for c,n in CLASS_NAMES.items() if n==choice)
+        def work():
+            info=create_max_talent_save(selection);update_session(lambda d:d.update(max_talent_class=choice))
+            total=sum(info['points'].values());what=f"{CLASS_NAMES[selection]}: {info['talents']} talents, {total} points" if selection!='all' else f"all {len(info['classes'])} classes: {info['talents']} talents"
+            message=f"Saved {info['path'].name} ({what}). Now import it: Options > Saves > Import Save. (Apply the cap first.)"
+            self.root.after(0,lambda:(self.say(message),self.say('Backup of your save: '+info['backup'].name),self.save_status.set(message)))
+        self.run_task(work,'Creating the max-talent save (your current save is backed up first)...')
     def describe_talents(self,data):
         try:process,base,digest=talents_target(data)
         except Exception:return 'Start the game to use talents.'
@@ -2574,6 +2766,7 @@ class WatcherWindow:
         update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
     def say(self,text):
         self.log.configure(state='normal');self.log.insert('end',time.strftime('%H:%M:%S  ')+text+'\n');self.log.see('end');self.log.configure(state='disabled')
+        if hasattr(self,'sections'):self.sections[1].summary.set(text[:40])
     def run_task(self,work,label):
         if self.busy:return
         self.busy=True;self.say(label)
@@ -2610,19 +2803,20 @@ class WatcherWindow:
         return {n:struct.unpack_from('<'+f,raw,off+24)[0] for n,off,f,_ in effective_targets(data,self.digest)}
     def refresh(self):
         try:
-            data=read();monitor=data.get('auto_monitor',{});alive=auto_alive(data)
+            data=read();monitor=data.get('auto_monitor',{});alive=auto_alive(data);self.alive=alive
             state=monitor.get('state','stopped') if alive else 'stopped'
-            self.state.set(state.replace('_',' '));self.state_label.configure(foreground=self.COLORS.get(state,'#000000'))
-            self.status.set(describe_state(monitor if alive else dict(),state))
+            self.headline.set(STATE_TITLES.get(state,state.replace('_',' ').capitalize()));self.dot.itemconfigure(self.dot_id,fill=self.COLORS.get(state,'#6b6b6b'))
+            level=monitor.get('level')
+            self.sub.set(f"{monitor.get('character') or 'Detecting character'}, level {level}" if level and alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
+            self.toggle_button.configure(text='Stop' if alive else 'Start')
             if not self.busy and time.monotonic()>=getattr(self,'talent_next',0):
                 self.talent_next=time.monotonic()+4;self.talent_status.set(self.describe_talents(data))
-            self.char.set(f"{monitor.get('character') or 'Detecting character'}, level {monitor['level']}" if monitor.get('level') else '-');self.proc.set(f"PID {monitor['game_pid']}" if monitor.get('game_pid') else '-')
             if state!=self.last_state:self.say('State: '+state+(f" ({monitor.get('reason')})" if monitor.get('reason') else ''));self.last_state=state
             try:values=self.live_values(monitor) if alive else {}
             except Exception:values={}
             for name,var in self.live_vars.items():
                 v=values.get(name);var.set('-' if v is None else (f'{v:,.0f}' if abs(v)>=100 else f'{v:.3g}'))
-            self.foot.set(f"Writes: {monitor.get('total_field_writes',0)}   |   mode: {'observe only' if monitor.get('trace_only') else 'write'}"+('' if alive else '   |   watcher not running'))
+            self.foot.set(f"Writes: {monitor.get('total_field_writes',0)}"+('' if alive else '  |  watcher not running'))
         except Exception as error:self.foot.set(f'Waiting... ({error})')
         self.root.after(1000,self.refresh)
 
@@ -2887,6 +3081,53 @@ def self_test():
                 finally:events.append('resume')
             with self.assertRaises(OSError):set_talent_cap(code,0,sites,150,pause)
             self.assertEqual(bytes(memory),snapshot);self.assertEqual(events,['pause','resume'])
+        def talent_records(self,trees=27,per_tree=13,stride=0xB0):
+            records=[];rva=1000
+            for tree in range(trees):
+                for n in range(per_tree):
+                    records.append(dict(rva=rva,id=f't{tree}_{n}',packed=(n%7)|((n%3)<<8)|(((tree+n)%5+1)<<16)));rva+=stride
+                rva+=0x400  # a gap between trees
+            return records
+        def test_talent_runs_become_three_trees_per_class(self):
+            table=assign_talent_classes(split_talent_runs(self.talent_records()))
+            self.assertEqual(sorted(table),sorted(CLASS_ORDER));self.assertTrue(all(len(trees)==3 and all(len(tree)==13 for tree in trees) for trees in table.values()))
+            self.assertEqual(table[1][0][0][0],'t0_0');self.assertEqual(table[11][2][-1][0],'t26_12')
+            with self.assertRaises(RuntimeError):assign_talent_classes(split_talent_runs(self.talent_records(trees=26)))
+            bad=self.talent_records()
+            bad[5]['packed']=9<<16
+            with self.assertRaises(RuntimeError):assign_talent_classes(split_talent_runs(bad))
+        def test_save_envelope_round_trips_and_detects_tampering(self):
+            key=b'azeroth-survivors/save/test-key'
+            plain='stat|kills=1\ntalent|8|100|a:1\n\u00e9'
+            sealed=rse1_seal(key,plain);self.assertTrue(sealed.startswith('RSE1:'));self.assertEqual(rse1_unseal(key,sealed),plain)
+            self.assertNotEqual(rse1_seal(key,plain),sealed)  # fresh random header each time
+            import base64
+            raw=bytearray(base64.b64decode(sealed[5:]));raw[20]^=1
+            with self.assertRaises(ValueError):rse1_unseal(key,'RSE1:'+base64.b64encode(bytes(raw)).decode())
+            with self.assertRaises(ValueError):rse1_unseal(b'azeroth-survivors/save/other',sealed)
+            with self.assertRaises(ValueError):rse1_unseal(key,'nope')
+        def test_the_save_key_is_found_only_when_it_authenticates_the_save(self):
+            key=SAVE_KEY_PREFIX+b've/v1'
+            sealed=rse1_seal(key,'x')
+            decoy=SAVE_KEY_PREFIX+b've/WRONG'+bytes(8)
+            plain_blob=b'\x00'*30+decoy+b'\x00'*40+key+bytes(16)+b'tail'
+            self.assertEqual(find_save_key(plain_blob,sealed),key)
+            masked=b'junk'+bytes(x^0x36 for x in key+bytes(16))
+            self.assertEqual(find_save_key(masked,sealed),key)
+            with self.assertRaises(RuntimeError):find_save_key(decoy+b'\x00'*64,sealed)
+        def test_editing_talents_touches_only_the_chosen_classes(self):
+            table={8:[[('a',5),('b',3)],[('c',1)],[('d',2)]],2:[[('p',4)],[('q',4)],[('r',4)]]}
+            plain='\n'.join(['stat|kills=1','talent|8|100|a:1','talent|2|200|p:2','talent|1|5|','spec|8|0|a:1|b:2|','spec|2|1|p:2||x:1','look|8|'])
+            edited=edit_talents(plain,table,[8]).split('\n')
+            self.assertEqual(edited[1],'talent|8|100|a:5,b:3,c:1,d:2');self.assertEqual(edited[4],'spec|8|0|a:5,b:3,c:1,d:2|b:2|')
+            self.assertEqual([edited[i] for i in (0,2,3,5,6)],['stat|kills=1','talent|2|200|p:2','talent|1|5|','spec|2|1|p:2||x:1','look|8|'])
+            both=edit_talents(plain,table,[8,2]).split('\n');self.assertEqual(both[2],'talent|2|200|p:4,q:4,r:4');self.assertEqual(both[5],'spec|2|1|p:4,q:4,r:4||x:1')
+            with self.assertRaises(RuntimeError):edit_talents('talent|8|1|a:1',table,[2])
+            self.assertEqual(max_alloc(table[8]),'a:5,b:3,c:1,d:2')
+        def test_a_table_that_disagrees_with_the_save_is_refused(self):
+            table={8:[[('a',5)],[('c',1)],[('d',2)]]}
+            check_table_against_save('talent|8|1|a:2,c:1',table)
+            with self.assertRaises(RuntimeError):check_table_against_save('talent|8|1|a:2,zzz:1',table)
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
@@ -3135,7 +3376,7 @@ if __name__ == '__main__':
         elif command in ('--help','-h','help'):
             print('setup --game PATH --name NAME (first time) | Preferred: (no arguments) = window | --background = silent watcher | auto | new-game [--apply] | status | stop')
             print('Manual: resolve-name | discover-name --name <character> | named-core --seconds 600 --background')
-            print('Diagnostics: talents apply|restore|status | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
+            print('Diagnostics: talents apply|restore|status | max-talents [--class mage] | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
             print('Each argument-based command accepts --help. Legacy start/apply-host were removed (they paused the game).')
         elif command in ('start','_worker','apply-host'):
             raise RuntimeError('Legacy process-pausing commands were removed. Use: auto --background')
@@ -3175,6 +3416,7 @@ if __name__ == '__main__':
         elif command == 'self-test': self_test()
         elif command == 'gui':gui()
         elif command == 'talents':talents_command()
+        elif command == 'max-talents':max_talents_command()
         elif command == 'setup':setup_command()
         elif command in ('version','--version'):print(f'{APP_NAME} {VERSION}')
         elif command == 'relayout':relayout()

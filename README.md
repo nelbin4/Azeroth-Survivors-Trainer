@@ -9,7 +9,7 @@
 - **Huge stats, automatically.** Max health, damage, crit, speed, experience, gold, pickup range, area and more, kept at your targets all run long, even after you level up.
 - **Nothing to configure.** It finds your character by itself, even if you rename it in the lobby.
 - **Doesn't pause the game.** It works quietly in the background while you play.
-- **Optional talent cap.** Raise your talent point cap (51 in the game) to 150 or any number up to 999.
+- **Optional talent cap and max talents.** Raise your talent point cap (51 in the game) to 150, then max every talent for one class or all nine.
 - **Easy to switch off.** Untick any stat, switch to *Observe only*, or press *Stop* at any time.
 - **Updates itself** from GitHub when you open it.
 
@@ -97,12 +97,21 @@ At startup (the window, or `--background`) the trainer checks GitHub for a newer
 | `python game.py relayout --hp 807 --damage 104 ...` | Learns moved stat offsets after a game update, from the values on your character sheet (read-only). |
 | `python game.py find-wallet --gold 1234` | Learns the gold counter's location from an exact gold amount (read-only). |
 | `python game.py talents apply --cap 150` | Raises the talent point cap in the running game. Also `restore` (back to 51) and `status`. |
+| `python game.py max-talents --class mage` | Writes an importable save with every talent at its maximum (`--class all` for all nine classes). Your current save is backed up first and never modified. |
 | `python game.py self-test` | Runs the built-in test suite. |
 | `python game.py --version` | Shows the version. |
 
 Add `--no-update` after any command (for example `python game.py gui --no-update`) to skip the startup update check.
 
-In the window you can use the **Talents** box (cap, Apply, Restore, *Apply when the game starts*), switch **Observe only / Write**, **Start / Stop**, include or exclude each stat, and **type a new target** for any stat (press Enter; the watcher restarts to use it). A sentence under the title says what the trainer is doing, and *What's new* shows the latest release notes. Closing the window leaves the watcher running; press **Stop** to end it.
+The window is one status card (what the trainer is doing, your character, and a Start/Stop button), a Mode switch, and the **Talents** box. Three folded sections hold the rest: **Stats and targets** (tick fields on or off, or type a new target and press Enter; the watcher restarts to use it), **Log**, and **Settings** (update check, apply the talent cap at startup). *What's new* shows the latest release notes. Closing the window leaves the watcher running; press **Stop** to end it.
+
+### Max talents without clicking
+
+1. Start the game and **Apply** the talent cap (150 covers every class; the biggest build is 128 points).
+2. In the Talents box pick a class (or *All classes*) and press **Create save**. The new file is `AzerothSurvivors-max-talents-<class>.sav` in the game's `Saves` folder (*Open Saves folder* gets you there), and your current save is copied to `AzerothSurvivors-before-max-talents-<time>.sav`.
+3. In the game: **Options, Saves, Import Save**, choose the new file, check the preview and accept.
+
+To undo it, import the `before-max-talents` backup the same way. Notes: the game keeps your Spec 1 *preset* trimmed to 51 points even though the active talents are full, so avoid switching specs; and after restarting the game, apply the cap *before* importing again, or the game cuts an over-limit build back to 51 when it loads.
 
 ## What it looks at on screen
 
@@ -122,6 +131,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **Windows build only.** The browser version is not supported.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Target values live in `session.json` (`config.targets`); a displayed `+N%` is the multiplier `1 + N/100` (for example +200% experience = 3.0). Speed is locked at +50%; experience may be set from 1 to 1,000,000. Extreme values can make the game misbehave (for example many level-ups per second).
+- **Max talents use a signed copy of your save.** The trainer finds the game's own save key inside the game file and accepts it only if it authenticates your current save; it refuses to write anything if the game's talent table does not match the talents already in your save. It never edits `characters.txt` itself.
 - **Talent cap:** it is applied to the running game only, so it must be applied again every time the game starts (or tick *Apply when the game starts*). The small "51 at most" text on the talents screen is a fixed label and keeps saying 51; the points you can spend are what change. Reopen the Talents tab after applying so the screen redraws. Each game update can move the code the cap lives in; the trainer finds it again from the game file and refuses to touch the game if what it finds does not fit.
 - **Not covered:** lives, thorns, lifesteal and pet damage. Lives, thorns and lifesteal were not found as editable values at all in the character's data (they appear to exist only once you own something that grants them); pet damage is simply not applied. Vs elites and DoT stacks are covered, but the game resets them whenever the trainer is not running, so keep the watcher running.
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
@@ -149,7 +159,7 @@ python build_exe.py --console  # console build, handy for testing commands
 ```
 
 ```bash
-python game.py self-test    # 49 tests, no game required
+python game.py self-test    # 54 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.
