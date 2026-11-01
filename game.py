@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.8.1'
+VERSION = '1.8.2'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -119,9 +119,12 @@ def actor_snapshot(memory,process,base,recipe,name,expected_id=None,health_ceili
                 amounts=amounts,values=values,hp_transition=f(hp_off)>f(0)+1)
 
 KNOWN_LAYOUTS = {
-    # Shipped layouts are empty on purpose: the stats-only layout for game build eb7447... (stats 912 bytes after the name header,
-    # level at -104, id at -144, no modifier list) hung the game during its first live write test, so it is not applied.
-    # See docs/TECHNICAL_NOTES.md.
+    # Game build eb7447...: stats 912 bytes after the name header, level at -104, id at -144, no verified modifier list, so no source targets.
+    # Only Damage is written (pinned every 20 ms; the game recalculates it every couple of seconds). A first test that wrote 14 stats at
+    # 9999-style values hung and then crashed the game; the other stats are added one at a time as each is proven. See docs/TECHNICAL_NOTES.md.
+    'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':dict(delta=912,no_owner=True,level_offset=-104,id_offset=-144,
+        skip_offsets=[8,44,60,64,68,72,120],write_only=['Damage'],
+        field_offsets={'Regeneration':40,'Area':44,'Gold Bonus':52,'Targets':56,'Echo':60,'Current Health':116},source='read off the character sheet'),
 }
 
 LEARN_FLOATS = (0,4,8,12,16,20,28,32,36,44,48,60,64,72,112)
@@ -245,7 +248,7 @@ class AutoBackend:
         self.scan_found={};self.scan_errors=0;self.scan_bytes=0;self.scan_complete=False;self.scan_restart=0;self.last_hint=0
         self.backed_up=set();self.missing_sources=[]
         self.base_recipe=dict(self.recipe);self.base_targets=list(targets);self.build=data['game_sha256'].lower();self.learning=False
-        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.disabled=set()
+        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.disabled=set();self.write_only=None
         self.hints.update(c['base'] for c in data.get('name_discovery',{}).get('candidates',[]))
         self.hints.update(int(h['base']) for h in data.get('auto_hints',[]) if h.get('build','').lower()==data['game_sha256'].lower() and h.get('name')==self.name)
     def find_process(self):
@@ -290,6 +293,7 @@ class AutoBackend:
             if 'wallet_offset' in learned:skip.discard(120);moved['Gold Wallet']=learned['wallet_offset']
         self.targets=[(n,moved.get(n,off),f,v) for n,off,f,v in self.base_targets if off not in skip and moved.get(n,off)!=-1]
         recipe['targets']=self.targets;self.recipe=recipe
+        only=(learned or {}).get('write_only');self.write_only=set(only) if only else None
     def learn(self,now):
         """Read-only: find the name->stats distance for an unseen build, confirm over >=3 spaced samples."""
         if self.name is None:
@@ -486,9 +490,23 @@ class AutoBackend:
     def run_reset(self):
         self.injected.clear();self.backed_up.clear()
     def apply(self,candidate):
+        result=self.apply_once(candidate)
+        if self.recipe.get('no_owner'):self.hold(candidate['base'],.4)  # these stats are recalculated every couple of seconds: pin them between steps
+        return result
+    def hold(self,base,seconds):
+        """Rewrite the pinned fields every 20 ms for a short while; stops at once if the record's level changes or disappears."""
+        level_address=base+self.recipe['level_offset'];level=struct.unpack('<I',self.memory.read_bytes(level_address,4))[0]
+        pins=[(base+off,struct.pack('<'+fmt,value)) for name,off,fmt,value in self.targets if name not in self.disabled and (not self.write_only or name in self.write_only)]
+        end=time.monotonic()+seconds
+        while time.monotonic()<end:
+            if self.signal.wait(0):raise InterruptedError('Stop requested.')
+            if struct.unpack('<I',self.memory.read_bytes(level_address,4))[0]!=level:return
+            for address,target in pins:self.memory.write_bytes(address,target)
+            time.sleep(.02)
+    def apply_once(self,candidate):
         fresh=self.snapshot(candidate);changes=[];names=[];missing=[]
         for name,off,fmt,value in self.targets:
-            if name in self.disabled:continue
+            if name in self.disabled or (self.write_only and name not in self.write_only):continue
             target=struct.pack('<'+fmt,value);address=fresh['base']+off
             if self.memory.read_bytes(address,4)!=target:changes.append((address,target));names.append(name)
         for kind,value in AUTO_SOURCE_TARGETS.items():

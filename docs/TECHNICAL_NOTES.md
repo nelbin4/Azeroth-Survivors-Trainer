@@ -411,3 +411,8 @@ The earlier notes concluded that no safe change was possible. That was wrong. Wh
 - The modifier list (kinds 14/19/28) moved or changed encoding and was not found, so no source targets were written.
 - First write test (watcher in write mode, targets 9999-style) ran about five minutes and 119 writes at level 9, then the game showed Responding = False. Cause not established (a bad write, or a field that must not hold these values, are the suspects). The layout was removed from the shipped table in 1.8.1.
 
+### Follow-up (1.8.2): one stat at a time
+- Test run, game responsive throughout: writes to Damage, Regeneration, Experience, Max Health and Current Health held for the seconds observed; Pickup, Crit, Crit Damage, Armor, Echo and Gold Bonus were put back almost at once (recalculated each tick). Later observation showed Damage itself is recalculated every couple of seconds, so no write is permanent.
+- Rewriting Damage every 20 ms (490 writes in 10 s) kept it at the target; the sheet read +9999% during the loop. The shipped layout therefore pins fields in short bursts after each normal step (`hold`) and writes only Damage (`write_only`).
+- The earlier hang then abort (`0xc0000409`, inside the game's own module) came from the first all-stats test. Not yet written on this build: area and extra targets (the likeliest culprits), and the stats listed above.
+

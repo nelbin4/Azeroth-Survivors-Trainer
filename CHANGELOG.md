@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.2 — 2026-11-01
+
+- **Damage works on game build `eb7447…`.** Only Damage is applied on that build for now: it is pinned at your target every 20 ms (the game recalculates it every couple of seconds). Verified live through the trainer itself: state *applying*, Damage held at +9999% on the character sheet, game responsive. The other stats there stay off until each is proven safe, one at a time.
+
 ## 1.8.1 — 2026-11-01
 
 - **Reverted the stats writes for game build `eb7447…`.** 1.8.0 shipped a stats-only layout for it; in the first live test the game stopped responding while it ran. That layout is no longer applied (reading and the other improvements stay). Do not use 1.8.0 on that build.
