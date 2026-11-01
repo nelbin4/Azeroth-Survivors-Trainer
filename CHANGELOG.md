@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1 — 2026-11-01
+
+- Talent cap: a clear message when Windows refuses to let the trainer change the game's code (seen on build `71e5f176…`). The README and technical notes say the feature may not work on the newest game build.
+
 ## 1.4.0 — 2026-11-01
 
 - **Talent cap** (migrated from `talent_150.py`): raise the talent point cap from 51 (to 150 by default, any value 1 to 999) from the window or `python game.py talents apply|restore|status|find`. It rewrites the 32-bit constant in three game instructions in memory only (nothing on disk), with plain Windows calls: no Frida, no hooks. Every spot is checked before writing, verified by readback and rolled back on failure. *Apply when the game starts* is optional and off by default.

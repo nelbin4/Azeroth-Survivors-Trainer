@@ -19,7 +19,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.4.0'
+VERSION = '1.4.1'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2283,7 +2283,10 @@ class ProcessCode:
         return buffer.raw
     def write_code(self, address, data):
         old = ctypes.c_ulong();done = ctypes.c_size_t()
-        if not self.api.VirtualProtectEx(self.handle, address, len(data), 0x40, ctypes.byref(old)):raise ctypes.WinError(ctypes.get_last_error())
+        if not self.api.VirtualProtectEx(self.handle, address, len(data), 0x40, ctypes.byref(old)):
+            error = ctypes.get_last_error()
+            if error == 5:raise RuntimeError("Windows refused to change the game's code (access denied). This game build appears to protect its code from other programs, so the talent cap cannot be applied this way.")
+            raise ctypes.WinError(error)
         try:
             if not self.api.WriteProcessMemory(self.handle, address, data, len(data), ctypes.byref(done)) or done.value != len(data):raise ctypes.WinError(ctypes.get_last_error())
         finally:
@@ -2323,11 +2326,13 @@ def set_talent_cap(code, base, sites, cap):
     return len(plan)
 
 def read_talent_cap(lines):
-    """The cap from the talents screen text 'X of Y points', or None when that screen is not showing."""
+    """The cap from the talents screen, or None when that screen is not showing. The game prints
+    "51 of 51 earned ... 51 at most"; older wording was "X of Y points"."""
     import re
-    for *_, text in lines:
-        found = re.search(r'(\d+)\s*(?:of|/)\s*(\d+)\s*points?', text, re.I)
-        if found:return int(found.group(2))
+    for pattern in (r'(\d+)\s*at most', r'\d+\s*of\s*(\d+)\s*earned', r'\d+\s*(?:of|/)\s*(\d+)\s*points?'):
+        for *_, text in lines:
+            found = re.search(pattern, text, re.I)
+            if found:return int(found.group(1))
     return None
 
 def learn_talent_sites(code, base, candidates, read_cap, alive, cap=TALENT_DEFAULT_CAP, progress=lambda *a: None, settle=.6):
@@ -2890,6 +2895,9 @@ def self_test():
         def test_talent_cap_is_read_from_the_points_text(self):
             self.assertEqual(read_talent_cap([(0,0,1,1,'TALENTS'),(0,0,1,1,'51 of 51 points')]),51)
             self.assertEqual(read_talent_cap([(0,0,1,1,'51 of 150 Points')]),150)
+            self.assertEqual(read_talent_cap([(0,0,1,1,'51 of 51 earned spent · 18/17/16 · 51 at most')]),51)
+            self.assertEqual(read_talent_cap([(0,0,1,1,'51 of 150 earned spent · 18/17/16 · 150 at most')]),150)
+            self.assertEqual(read_talent_cap([(0,0,1,1,'20 points · Hot Streak'),(0,0,1,1,'Every talent point earned.')]),None)
             self.assertIsNone(read_talent_cap([(0,0,1,1,'Collection'),(0,0,1,1,'Codex')]))
         def test_learning_finds_the_spot_that_changes_the_screen_and_restores_everything(self):
             code,sites,memory=self.talent_memory()
