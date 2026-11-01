@@ -421,3 +421,6 @@ The earlier notes concluded that no safe change was possible. That was wrong. Wh
 - Stale copies (four were seen) are told from the live record by a 1% nudge of Damage: the live record is rewritten by the game within about 2 s, a copy keeps the nudged value and is then restored. The first scan uses four threads and tries chunks near earlier hits first; the found address, header distance and process identity are stored in `session.json` (`core_builds`), so a watcher restart in the same game process finds it in about a second.
 - Only Damage is written (every 20 ms for 0.4 s after each step; the game recalculates it every couple of seconds). A level or player id was not needed.
 
+### Area (1.9.3)
+Area sits at +44 on build eb7447 (1.224 on the sheet's +22%). Pinned at 2, 4, 10, 30 and 100.99 for five seconds each and then 15 s at 100.99 in a party run: no hang. The earlier crash was therefore not Area alone; extra targets (u32 at +56) at 9999 remains the main suspect. Per-build offsets live in `CORE_FIELDS`; builds not listed there get Damage only.
+

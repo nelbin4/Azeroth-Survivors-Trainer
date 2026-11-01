@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.2'
+VERSION = '1.9.3'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -218,6 +218,9 @@ def find_characters(memory,process,recipe,cancelled=lambda:False,budget=40.):
 
 
 CORE_CHUNK = 4194304
+CORE_FIELDS = {  # extra stats pinned in pattern mode, per game build (offsets read off the character sheet)
+    'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':{'Area':44},
+}
 
 def core_window_ok(values):
     """The first eight stat fields in their fixed order: health, damage, haste, crit, crit damage, speed, pickup, experience."""
@@ -457,8 +460,9 @@ class AutoBackend:
             except (ValueError,RuntimeError):
                 if attempt==2:raise
                 if self.signal.wait(.005):raise InterruptedError('Stop requested.')
-    def snapshot_core(self,candidate):
-        return self.core_candidate(candidate['base'])
+    def applied_names(self):
+        if self.core:return ['Damage']+sorted(CORE_FIELDS.get(self.build,{}))
+        return [t[0] for t in self.targets if not self.write_only or t[0] in self.write_only]
     def at(self,base):
         # Discovery never gets the relaxed health rule for an unknown identity.
         return actor_snapshot(self.memory,self.process,base,self.recipe,self.name)
@@ -545,15 +549,19 @@ class AutoBackend:
         update_session(store)
         return [self.core_candidate(self.core_base)]
     def core_apply(self,candidate):
-        want=next((v for n,o,f,v in self.targets if n=='Damage'),None)
-        if want is None or 'Damage' in self.disabled:return dict(writes=0,values=candidate['values'])
-        base=candidate['base'];target=struct.pack('<f',want);writes=0;end=time.monotonic()+.4;n=0
+        base=candidate['base'];fields={'Damage':4,**CORE_FIELDS.get(self.build,{})};pins=[]
+        for name,offset in fields.items():
+            want=next((v for n,o,f,v in self.base_targets if n==name),None)
+            if want is not None and name not in self.disabled:pins.append((name,base+offset,struct.pack('<f',want),want))
+        if not pins:return dict(writes=0,values=candidate['values'])
+        writes=0;end=time.monotonic()+.4;n=0
         while time.monotonic()<end:
             if self.signal.wait(0):raise InterruptedError('Stop requested.')
             if n%10==0:self.core_candidate(base)  # stop at once if the record moved or changed shape
-            if self.memory.read_bytes(base+4,4)!=target:self.memory.write_bytes(base+4,target);writes+=1
+            for name,address,target,want in pins:
+                if self.memory.read_bytes(address,4)!=target:self.memory.write_bytes(address,target);writes+=1
             n+=1;time.sleep(.02)
-        return dict(writes=writes,values=dict(candidate['values'],Damage=want))
+        return dict(writes=writes,values=dict(candidate['values'],**{name:want for name,address,target,want in pins}))
     def seek_plain(self,now):
         found={}
         for base in sorted(self.hints):
@@ -809,7 +817,7 @@ def auto_command():
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
                     runtime.update(state);runtime['reason']=state.get('reason');runtime['character']=backend.name;runtime.update(heartbeat=time.time(),game_pid=engine.generation[0] if engine.generation else None,
                         game_created=engine.generation[1] if engine.generation else None,scan_bytes=backend.scan_bytes,
-                        scan_errors=backend.scan_errors,missing_source_kinds=backend.missing_sources)
+                        scan_errors=backend.scan_errors,missing_source_kinds=backend.missing_sources,applied=backend.applied_names())
                     def publish(current):
                         if current.get('stop_requested'):signal.request()
                         current['auto_monitor']=runtime;backend.disabled=set(current.get('gui_disabled',[]))
@@ -2865,24 +2873,6 @@ def parse_target(text,offset,fmt):
         return int(value)
     return value
 
-class Disclosure:
-    """A one-line section header that expands to show its body."""
-    def __init__(self,parent,title,summary,build,opened=False):
-        import tkinter as tk
-        from tkinter import ttk
-        self.title=title;self.opened=False;self.summary=tk.StringVar(value=summary)
-        self.frame=ttk.Frame(parent);header=ttk.Frame(self.frame);header.pack(fill='x')
-        self.label=ttk.Label(header,text='\u25b8  '+title,cursor='hand2');self.label.pack(side='left',padx=12,pady=7)
-        side=ttk.Label(header,textvariable=self.summary,foreground='#6b6b6b');side.pack(side='right',padx=12)
-        self.body=ttk.Frame(self.frame);build(self.body)
-        for widget in (header,self.label,side):widget.bind('<Button-1>',lambda e:self.toggle())
-        if opened:self.toggle()
-    def toggle(self):
-        self.opened=not self.opened
-        if self.opened:self.body.pack(fill='both',expand=True,padx=12,pady=(0,8))
-        else:self.body.pack_forget()
-        self.label.configure(text=('\u25be  ' if self.opened else '\u25b8  ')+self.title)
-
 class WatcherWindow:
     """Small Tk front end: one status card with Start/Stop, the talents box, and folded sections for stats, log and settings."""
     COLORS={'in_lobby':'#1565c0','in_menu':'#6b6b6b','applying':'#2e7d32','waiting_progress':'#b26a00','learning':'#1565c0','learned':'#1565c0','seeking_record':'#6b6b6b','blocked':'#c62828','blocked_ambiguous':'#c62828','recovering':'#c62828','waiting_process':'#6b6b6b','stopped':'#6b6b6b','expired':'#6b6b6b','failed':'#c62828'}
@@ -2901,24 +2891,14 @@ class WatcherWindow:
         self.mode=tk.StringVar(value='write')
         self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
         self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
-        box=ttk.LabelFrame(root,text='Talents');box.pack(fill='x',padx=12,pady=(0,8))
-        first=ttk.Frame(box);first.pack(fill='x',padx=8,pady=(6,2))
-        self.cap_check=ttk.Checkbutton(first,text=f'Raise talent cap to {self.talent_cap.get()}',variable=self.talent_auto,command=self.talent_toggle);self.cap_check.pack(side='left')
-        self.talent_status=tk.StringVar(value='');ttk.Label(first,textvariable=self.talent_status,foreground='#2e7d32').pack(side='right')
-        second=ttk.Frame(box);second.pack(fill='x',padx=8,pady=(6,2))
-        ttk.Label(second,text='Max talents for').pack(side='left')
-        names=['All classes']+[CLASS_NAMES[c] for c in CLASS_ORDER]
-        self.class_choice=ttk.Combobox(second,values=names,state='readonly',width=14);self.class_choice.set(read().get('max_talent_class','All classes'))
-        if self.class_choice.get() not in names:self.class_choice.set('All classes')
-        self.class_choice.pack(side='left',padx=6)
-        ttk.Button(second,text='Create save',command=self.max_talents_create).pack(side='left')
-        self.save_status=tk.StringVar(value='Then in the game: Options > Saves > Import Save.')
-        ttk.Label(box,textvariable=self.save_status,foreground='#555555',wraplength=470).pack(anchor='w',padx=8,pady=(2,8))
-        self.field_vars={};self.live_vars={};self.sections=[]
-        ttk.Separator(root).pack(fill='x',padx=12);more=Disclosure(root,'More','stats, log, settings',self.build_more);more.frame.pack(fill='x')
-        ttk.Separator(root).pack(fill='x',padx=12)
-        foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(6,10))
-        self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left')
+        self.field_vars={};self.live_vars={};self.row_widgets={}
+        tabs=ttk.Notebook(root);tabs.pack(fill='both',expand=True,padx=12,pady=(0,6))
+        stats=ttk.Frame(tabs,padding=(6,6));talents=ttk.Frame(tabs,padding=(6,6));logs=ttk.Frame(tabs,padding=(6,6))
+        tabs.add(stats,text='Stats');tabs.add(talents,text='Talents');tabs.add(logs,text='Log')
+        self.build_stats(stats);self.build_talents(talents);self.build_log(logs)
+        foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(0,10))
+        ttk.Button(foot,text='Settings',command=self.open_settings).pack(side='left')
+        self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left',padx=10)
         ttk.Label(foot,text='Solo or host only',foreground='#b26a00').pack(side='right')
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
@@ -2928,20 +2908,35 @@ class WatcherWindow:
         self.refresh()
         if not configured():root.after(400,self.locate_game)  # first run: the window is up, now ask where the game is
         elif not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
-    def build_more(self,body):
-        ttk=self.ttk
-        modes=ttk.Frame(body);modes.pack(fill='x',pady=(0,4))
+    def build_talents(self,body):
+        tk=self.tk;ttk=self.ttk
+        first=ttk.Frame(body);first.pack(fill='x',pady=(0,6))
+        self.cap_check=ttk.Checkbutton(first,text=f'Raise talent cap to {self.talent_cap.get()}',variable=self.talent_auto,command=self.talent_toggle);self.cap_check.pack(side='left')
+        self.talent_status=tk.StringVar(value='');ttk.Label(first,textvariable=self.talent_status,foreground='#2e7d32').pack(side='right')
+        second=ttk.Frame(body);second.pack(fill='x',pady=(0,4))
+        ttk.Label(second,text='Max talents for').pack(side='left')
+        names=['All classes']+[CLASS_NAMES[c] for c in CLASS_ORDER]
+        self.class_choice=ttk.Combobox(second,values=names,state='readonly',width=14);self.class_choice.set(read().get('max_talent_class','All classes'))
+        if self.class_choice.get() not in names:self.class_choice.set('All classes')
+        self.class_choice.pack(side='left',padx=6)
+        ttk.Button(second,text='Create save',command=self.max_talents_create).pack(side='left')
+        ttk.Button(second,text='Open Saves folder',command=self.open_saves).pack(side='left',padx=6)
+        self.save_status=tk.StringVar(value='Then in the game: Options > Saves > Import Save.')
+        ttk.Label(body,textvariable=self.save_status,foreground='#555555',wraplength=470).pack(anchor='w',pady=(2,0))
+    def open_settings(self):
+        tk=self.tk;ttk=self.ttk
+        if getattr(self,'settings_window',None) and self.settings_window.winfo_exists():self.settings_window.lift();return
+        win=self.settings_window=tk.Toplevel(self.root);win.title('Settings');win.transient(self.root);body=ttk.Frame(win,padding=14);body.pack(fill='both',expand=True)
+        modes=ttk.Frame(body);modes.pack(fill='x',pady=(0,6))
         ttk.Label(modes,text='Mode').pack(side='left')
         ttk.Radiobutton(modes,text='Write',variable=self.mode,value='write').pack(side='left',padx=(8,4))
         ttk.Radiobutton(modes,text='Observe only',variable=self.mode,value='observe').pack(side='left')
-        cap=ttk.Frame(body);cap.pack(fill='x',pady=(0,4))
+        cap=ttk.Frame(body);cap.pack(fill='x',pady=(0,6))
         ttk.Label(cap,text='Talent point cap').pack(side='left')
         entry=ttk.Entry(cap,textvariable=self.talent_cap,width=6);entry.pack(side='left',padx=6)
         for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e:self.cap_changed())
-        ttk.Button(cap,text='Open Saves folder',command=self.open_saves).pack(side='right')
-        ttk.Button(cap,text="What's new",command=self.whats_new).pack(side='right',padx=6)
-        for title,summary,build in (('Stats and targets',f"{len(read()['config']['targets'])} fields",self.build_stats),('Log','',self.build_log),('Settings','updates',self.build_settings)):
-            ttk.Separator(body).pack(fill='x');section=Disclosure(body,title,summary,build);section.frame.pack(fill='x');self.sections.append(section)
+        self.build_settings(body)
+        ttk.Button(body,text="What's new",command=self.whats_new).pack(anchor='w',pady=(8,0))
     def cap_changed(self):
         try:cap=self.talent_cap_value()
         except ValueError as error:
@@ -2958,13 +2953,14 @@ class WatcherWindow:
         for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
         for row,(name,offset,fmt,value) in enumerate(data['config']['targets'],start=1):
             var=self.tk.BooleanVar(value=name not in disabled);self.field_vars[name]=var
-            ttk.Checkbutton(self.rows,variable=var,command=self.save_fields).grid(row=row,column=0)
+            check=ttk.Checkbutton(self.rows,variable=var,command=self.save_fields);check.grid(row=row,column=0)
             ttk.Label(self.rows,text=name,width=16).grid(row=row,column=1,sticky='w',padx=6)
             live=self.tk.StringVar(value='-');self.live_vars[name]=live
             ttk.Label(self.rows,textvariable=live,width=14).grid(row=row,column=2,sticky='w',padx=6)
             target=self.tk.StringVar(value=f'{value:g}')
             entry=ttk.Entry(self.rows,textvariable=target,width=11,state='disabled' if offset==20 else 'normal');entry.grid(row=row,column=3,sticky='w',padx=6)
             for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e,n=name,o=offset,f=fmt,v=target:self.commit_target(n,o,f,v))
+            self.row_widgets[name]=(check,entry,offset)
     def build_stats(self,body):
         tk=self.tk;ttk=self.ttk
         canvas=tk.Canvas(body,highlightthickness=0,height=230,width=470);bar=ttk.Scrollbar(body,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
@@ -3046,7 +3042,6 @@ class WatcherWindow:
         update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
     def say(self,text):
         self.log.configure(state='normal');self.log.insert('end',time.strftime('%H:%M:%S  ')+text+'\n');self.log.see('end');self.log.configure(state='disabled')
-        if hasattr(self,'sections'):self.sections[1].summary.set(text[:40])
     def run_task(self,work,label):
         if self.busy:return
         self.busy=True;self.say(label)
@@ -3100,8 +3095,14 @@ class WatcherWindow:
             if state!=self.last_state:self.say('State: '+state+(f" ({monitor.get('reason')})" if monitor.get('reason') else ''));self.last_state=state
             try:values=self.live_values(monitor) if alive else {}
             except Exception:values={}
+            applied=monitor.get('applied') if alive else None
+            for name,(check,entry,offset) in self.row_widgets.items():
+                on=applied is None or name in applied
+                check.configure(state='normal' if on else 'disabled');entry.configure(state='normal' if on and offset!=20 else 'disabled')
             for name,var in self.live_vars.items():
-                v=values.get(name);var.set('-' if v is None else (f'{v:,.0f}' if abs(v)>=100 else f'{v:.3g}'))
+                v=values.get(name)
+                if applied is not None and name not in applied:var.set('not on this build')
+                else:var.set('-' if v is None else (f'{v:,.0f}' if abs(v)>=100 else f'{v:.3g}'))
             self.foot.set(f"Writes: {monitor.get('total_field_writes',0)}"+('' if alive else '  |  watcher not running'))
         except Exception as error:self.foot.set(f'Waiting... ({error})')
         self.root.after(1000,self.refresh)

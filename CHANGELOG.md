@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.3 — 2026-11-02
+
+- **Area is applied** on game build `eb7447…`, next to Damage (both pinned every 20 ms). Tested stepwise first: 2, 4, 10, 30 and 100.99, five seconds each, then 15 seconds at 100.99 in a live party run (level 71 to 72), game responsive throughout. Extra targets are still off.
+- **Simpler window:** the status card with three tabs (Stats, Talents, Log) and a Settings button. Stats the current build does not apply yet are greyed out.
+
 ## 1.9.2 — 2026-11-02
 
 - **Fix: several live characters.** The game can hold other live hero records besides yours (companions, a lobby); the trainer used to give up ("blocked ambiguous"). It now picks yours: the one whose header text is the name in the player frame on screen, or, when the screen does not show it (menus), the name remembered from the last run. Verified live: Damage applied to the right character.
