@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.8.0'
+VERSION = '1.8.1'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -119,10 +119,9 @@ def actor_snapshot(memory,process,base,recipe,name,expected_id=None,health_ceili
                 amounts=amounts,values=values,hp_transition=f(hp_off)>f(0)+1)
 
 KNOWN_LAYOUTS = {
-    # Game build eb7447...: stats 912 bytes after the name header, level at -104 (provisional), no verified modifier list yet, so only these stats are written.
-    'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':dict(delta=912,no_owner=True,level_offset=-104,id_offset=-144,
-        skip_offsets=[8,44,60,64,68,72,120],
-        field_offsets={'Regeneration':40,'Area':44,'Gold Bonus':52,'Targets':56,'Echo':60,'Current Health':116},source='read off the character sheet'),
+    # Shipped layouts are empty on purpose: the stats-only layout for game build eb7447... (stats 912 bytes after the name header,
+    # level at -104, id at -144, no modifier list) hung the game during its first live write test, so it is not applied.
+    # See docs/TECHNICAL_NOTES.md.
 }
 
 LEARN_FLOATS = (0,4,8,12,16,20,28,32,36,44,48,60,64,72,112)

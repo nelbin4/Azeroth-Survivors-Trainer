@@ -404,3 +404,10 @@ The earlier notes concluded that no safe change was possible. That was wrong. Wh
 - **What the game does on import.** Imported talents are kept at their maximum for the active allocation while the cap patch is on; the Spec 1 preset is trimmed to 51 points (the preset path uses a cap the patch does not change). Without the patch a load trims an over-limit build to 51.
 - **Why the live ranks were not editable.** Five rounds of memory tracking (rank 2, 3, 4, 5, in 32-bit, 64-bit and decimal form, and beside the talent name) found no stored rank. The save route sidesteps that.
 
+## Game build eb7447 (2026-11-01): layout found, first live write hung the game
+
+- Stats block is 912 bytes after the name header (the text header is only an anchor; any well-formed text header works). Verified against the character sheet: +0 max HP, +4 damage, +12 crit, +16 crit damage, +20 speed, +24 pickup, +28 experience, +32 armor, +40 regen, +44 area, +52 gold bonus, +56 extra targets (u32), +60 echo, +116 current HP. A new field appears at +36; haste, luck, kill heal, buff power, DoT and the wallet were not confirmed.
+- Level was found at -104 (1 at level 1, 2 and 4 on later reads); the player id (-144) is a persistent hero id, not per run. Stale copies of the record also exist (display copies, other addresses) and are not live.
+- The modifier list (kinds 14/19/28) moved or changed encoding and was not found, so no source targets were written.
+- First write test (watcher in write mode, targets 9999-style) ran about five minutes and 119 writes at level 9, then the game showed Responding = False. Cause not established (a bad write, or a field that must not hold these values, are the suspects). The layout was removed from the shipped table in 1.8.1.
+

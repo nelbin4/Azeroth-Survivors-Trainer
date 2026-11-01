@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.8.1 — 2026-11-01
+
+- **Reverted the stats writes for game build `eb7447…`.** 1.8.0 shipped a stats-only layout for it; in the first live test the game stopped responding while it ran. That layout is no longer applied (reading and the other improvements stay). Do not use 1.8.0 on that build.
+
 ## 1.8.0 — 2026-11-01
 
 - **Supports the newest game build (`eb7447…`)** with no learning wait. Its layout is read from the character sheet and shipped with the trainer. Verified live: the trainer finds your character on its own and keeps these stats at your targets: health, damage, crit, crit damage, speed, pickup, experience, armor, regeneration, area, gold bonus, extra targets, echo and current health.
