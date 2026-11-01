@@ -19,7 +19,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.4.2'
+VERSION = '1.5.0'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -554,7 +554,7 @@ def auto_command():
         data=read();backend=None
         runtime=dict(pid=os.getpid(),created=psutil.Process().create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only,pauses=False)
         update_session(lambda current:current.update(auto_monitor=runtime))
-        deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;last_identity=None;talents_done=[None]
+        deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;last_identity=None
         try:
             backend=AutoBackend(data,signal)
             if args.trace_only:
@@ -562,13 +562,6 @@ def auto_command():
             engine=AutoRecovery(backend)
             while time.monotonic()<deadline and not signal.wait(0):
                 state=engine.step()
-                if engine.generation and engine.generation!=talents_done[0] and not args.trace_only and state.get('state') not in ('waiting_process','starting'):
-                    talents_done[0]=engine.generation
-                    if read().get('talent_auto',False):
-                        def talents_job():
-                            try:talents_apply(read().get('talent_cap',TALENT_DEFAULT_CAP))
-                            except Exception:pass
-                        threading.Thread(target=talents_job,daemon=True).start()
                 if state.get('state')!=last_state:
                     print(json.dumps(state),flush=True);last_state=state.get('state')
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
@@ -2224,118 +2217,6 @@ def restart_after_update():
         creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW)
     sys.exit(0)
 
-TALENT_ORIGINAL = 51
-TALENT_DEFAULT_CAP = 150
-# From the original talent_150.py (an older build). Sites for other builds can be stored in session.json under learned_builds[<hash>]['talent_sites'].
-KNOWN_TALENT_SITES = {'e8ff033544095e81d74087ff400d50286b26af02291e649f4c5e4d76cbcf8863': [
-    dict(rva=0x5B7D447, original='bf33000000'), dict(rva=0x5B7E4E4, original='b833000000'), dict(rva=0x5B8E8C1, original='41b933000000')]}
-
-def talent_imm_offset(original_hex):
-    return 2 if bytes.fromhex(original_hex)[0] == 0x41 else 1  # REX prefix before mov r32, imm32
-
-def talent_patch_bytes(original_hex, cap):
-    """The instruction with its 32-bit constant replaced; refuses anything that does not load 51."""
-    raw = bytearray.fromhex(original_hex);offset = talent_imm_offset(original_hex)
-    if len(raw) < offset + 4 or struct.unpack_from('<I', raw, offset)[0] != TALENT_ORIGINAL:raise ValueError('That instruction does not load 51.')
-    if not 1 <= cap <= 999:raise ValueError('Talent cap must be 1 to 999.')
-    struct.pack_into('<I', raw, offset, cap);return bytes(raw)
-
-def talent_sites_for(data, digest):
-    learned = data.get('learned_builds', {}).get(digest.lower(), {}).get('talent_sites')
-    return learned or KNOWN_TALENT_SITES.get(digest.lower(), [])
-
-class ProcessCode:
-    """Read and write another process's code pages with plain Windows calls. No hooks, no injection, no suspension."""
-    def __init__(self, pid):
-        self.api = ctypes.WinDLL('kernel32', use_last_error=True)
-        self.api.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong];self.api.OpenProcess.restype = ctypes.c_void_p
-        self.api.ReadProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
-        self.api.WriteProcessMemory.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
-        self.api.VirtualProtectEx.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_ulong, ctypes.POINTER(ctypes.c_ulong)]
-        self.api.FlushInstructionCache.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
-        self.api.CloseHandle.argtypes = [ctypes.c_void_p]
-        self.handle = self.api.OpenProcess(0x0008 | 0x0010 | 0x0020 | 0x0400, False, pid)  # VM_OPERATION | VM_READ | VM_WRITE | QUERY
-        if not self.handle:raise ctypes.WinError(ctypes.get_last_error())
-    def read(self, address, size):
-        buffer = ctypes.create_string_buffer(size);done = ctypes.c_size_t()
-        if not self.api.ReadProcessMemory(self.handle, address, buffer, size, ctypes.byref(done)) or done.value != size:raise ctypes.WinError(ctypes.get_last_error())
-        return buffer.raw
-    def write_code(self, address, data):
-        old = ctypes.c_ulong();done = ctypes.c_size_t()
-        if not self.api.VirtualProtectEx(self.handle, address, len(data), 0x40, ctypes.byref(old)):
-            error = ctypes.get_last_error()
-            if error == 5:raise RuntimeError("Windows refused to change the game's code (access denied). This game build appears to protect its code from other programs, so the talent cap cannot be applied this way.")
-            raise ctypes.WinError(error)
-        try:
-            if not self.api.WriteProcessMemory(self.handle, address, data, len(data), ctypes.byref(done)) or done.value != len(data):raise ctypes.WinError(ctypes.get_last_error())
-        finally:
-            restored = ctypes.c_ulong();self.api.VirtualProtectEx(self.handle, address, len(data), old.value, ctypes.byref(restored))
-            self.api.FlushInstructionCache(self.handle, address, len(data))
-    def close(self):
-        if self.handle:self.api.CloseHandle(self.handle);self.handle = None
-    def __enter__(self):return self
-    def __exit__(self, *_):self.close()
-
-def talent_state(code, base, sites):
-    """(sites currently patched, total sites, cap shown by the first patched site)."""
-    patched = 0;cap = None
-    for site in sites:
-        original = bytes.fromhex(site['original']);current = code.read(base + site['rva'], len(original));offset = talent_imm_offset(site['original'])
-        if current[:offset] != original[:offset]:return 0, len(sites), None
-        value = struct.unpack_from('<I', current, offset)[0]
-        if value != TALENT_ORIGINAL:patched += 1;cap = cap or value
-    return patched, len(sites), cap
-
-def set_talent_cap(code, base, sites, cap):
-    """cap 51 restores the game. Checks every site first, writes each with readback, and rolls back on any failure."""
-    plan = []
-    for site in sites:
-        original = bytes.fromhex(site['original']);address = base + site['rva'];offset = talent_imm_offset(site['original'])
-        current = code.read(address, len(original))
-        if current[:offset] != original[:offset] or current[offset + 4:] != original[offset + 4:]:raise RuntimeError(f"Unexpected code at {site['rva']:#x}; this is not the game version these spots belong to.")
-        plan.append((address, current, talent_patch_bytes(site['original'], cap)))
-    written = []
-    try:
-        for address, current, target in plan:
-            code.write_code(address, target);written.append((address, current))
-            if code.read(address, len(target)) != target:raise RuntimeError('Readback did not match.')
-    except Exception:
-        for address, current in reversed(written):code.write_code(address, current)
-        raise
-    return len(plan)
-
-TALENT_CACHE = {}
-
-def talents_target(data):
-    """(process, module base, sites, digest) for the running game, or a RuntimeError saying what is missing."""
-    from PyMemoryEditor import OpenProcess
-    matches = [p for p in psutil.process_iter(['exe']) if p.info['exe'] and os.path.normcase(p.info['exe']) == os.path.normcase(data['game_exe'])]
-    if len(matches) != 1:raise RuntimeError('Start the game first (expected one game process).')
-    process = matches[0];key = (process.pid, process.create_time())
-    if key not in TALENT_CACHE:
-        with Path(process.exe()).open('rb') as stream:digest = hashlib.file_digest(stream, 'sha256').hexdigest().lower()
-        with OpenProcess(pid=process.pid, permission=0x410) as memory:
-            modules = [m for m in memory.get_modules() if m.name.lower() == Path(data['game_exe']).name.lower()]
-        if len(modules) != 1:raise RuntimeError('Could not locate the game module.')
-        TALENT_CACHE.clear();TALENT_CACHE[key] = (modules[0].base_address, digest)  # hashing 147 MB once per game start, not per refresh
-    base, digest = TALENT_CACHE[key]
-    return process, base, talent_sites_for(data, digest), digest
-
-def talents_apply(cap):
-    data = read();process, base, sites, digest = talents_target(data)
-    if not sites:raise RuntimeError('The talent cap is not available for this game version: its code spots are not known.')
-    with ProcessCode(process.pid) as code:return set_talent_cap(code, base, sites, cap)
-
-def talents_command():
-    parser = argparse.ArgumentParser(description='Change the talent point cap in the running game (memory only; re-apply after a restart).')
-    parser.add_argument('action', choices=['apply', 'restore', 'status'])
-    parser.add_argument('--cap', type=int, default=TALENT_DEFAULT_CAP)
-    args = parser.parse_args(sys.argv[2:])
-    if args.action == 'status':
-        data = read();process, base, sites, digest = talents_target(data)
-        with ProcessCode(process.pid) as code:print(json.dumps(dict(build=digest, known_spots=len(sites), state=talent_state(code, base, sites) if sites else None)))
-    else:print(f"{'Patched' if args.action == 'apply' else 'Restored'} {talents_apply(args.cap if args.action == 'apply' else TALENT_ORIGINAL)} spot(s).")
-
 def configure(game_exe,name):
     """Create or update session.json for this machine: game path and character name."""
     exe=Path(game_exe)
@@ -2437,16 +2318,6 @@ class WatcherWindow:
         ttk.Label(ctl,text='Mode').pack(side='left',padx=(24,6))
         ttk.Radiobutton(ctl,text='Observe only',variable=self.mode,value='observe').pack(side='left')
         ttk.Radiobutton(ctl,text='Write',variable=self.mode,value='write').pack(side='left',padx=6)
-        card=ttk.LabelFrame(root,text='Talents');card.pack(fill='x',padx=12,pady=(2,6))
-        first=ttk.Frame(card);first.pack(fill='x',padx=8,pady=(4,0))
-        ttk.Label(first,text=f'Talent point cap  {TALENT_ORIGINAL} ->').pack(side='left')
-        self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
-        ttk.Entry(first,textvariable=self.talent_cap,width=6).pack(side='left',padx=6)
-        ttk.Button(first,text='Apply',command=self.talent_apply).pack(side='left')
-        ttk.Button(first,text=f'Restore {TALENT_ORIGINAL}',command=self.talent_restore).pack(side='left',padx=6)
-        self.talent_status=tk.StringVar(value='');ttk.Label(card,textvariable=self.talent_status,foreground='#444444').pack(anchor='w',padx=8)
-        self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
-        ttk.Checkbutton(card,text='Apply when the game starts',variable=self.talent_auto,command=lambda:update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))).pack(anchor='w',padx=8,pady=(0,4))
         self.updates=tk.BooleanVar(value=read().get('auto_update',True))
         ttk.Checkbutton(root,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w',padx=12)
         ttk.Label(root,text='Stats on the character (tick = included)').pack(anchor='w',padx=12)
@@ -2478,28 +2349,6 @@ class WatcherWindow:
             target=self.tk.StringVar(value=f'{value:g}')
             entry=ttk.Entry(self.rows,textvariable=target,width=11,state='disabled' if offset==20 else 'normal');entry.grid(row=row,column=3,sticky='w',padx=6)
             for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e,n=name,o=offset,f=fmt,v=target:self.commit_target(n,o,f,v))
-    def describe_talents(self,data):
-        try:process,base,sites,digest=talents_target(data)
-        except Exception:return 'Start the game to use talents.'
-        if not sites:return 'Talent cap is not available for this game version (its code spots are not known).'
-        try:
-            with ProcessCode(process.pid) as code:patched,total,cap=talent_state(code,base,sites)
-        except Exception as error:return f'Talent spots could not be read ({error}).'
-        return f'Patched: cap {cap} ({patched} of {total} places).' if patched else f'Not patched ({total} places known).'
-    def talent_cap_value(self):
-        try:cap=int(self.talent_cap.get())
-        except ValueError:cap=0
-        if not 1<=cap<=999:raise ValueError('Talent cap must be a whole number from 1 to 999.')
-        return cap
-    def talent_apply(self):
-        def work():
-            cap=self.talent_cap_value();count=talents_apply(cap)
-            update_session(lambda d:d.update(talent_cap=cap));self.root.after(0,lambda:self.say(f'Talent cap set to {cap} ({count} spot(s) patched).'))
-        self.run_task(work,'Applying the talent cap...')
-    def talent_restore(self):
-        def work():
-            count=talents_apply(TALENT_ORIGINAL);self.root.after(0,lambda:self.say(f'Talent cap restored to {TALENT_ORIGINAL} ({count} spot(s)).'))
-        self.run_task(work,'Restoring the talent cap...')
     def commit_target(self,name,offset,fmt,var):
         current=next((t[3] for t in read()['config']['targets'] if t[0]==name),None)
         try:value=parse_target(var.get(),offset,fmt)
@@ -2563,8 +2412,6 @@ class WatcherWindow:
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.state.set(state.replace('_',' '));self.state_label.configure(foreground=self.COLORS.get(state,'#000000'))
             self.status.set(describe_state(monitor if alive else dict(),state))
-            if not self.busy and time.monotonic()>=getattr(self,'talent_next',0):
-                self.talent_next=time.monotonic()+4;self.talent_status.set(self.describe_talents(data))
             self.char.set(f"{monitor.get('character') or 'Detecting character'}, level {monitor['level']}" if monitor.get('level') else '-');self.proc.set(f"PID {monitor['game_pid']}" if monitor.get('game_pid') else '-')
             if state!=self.last_state:self.say('State: '+state+(f" ({monitor.get('reason')})" if monitor.get('reason') else ''));self.last_state=state
             try:values=self.live_values(monitor) if alive else {}
@@ -2778,49 +2625,6 @@ def self_test():
             for text,offset,fmt in (('abc',24,'f'),('-1',24,'f'),('1e9',24,'f'),('0.5',28,'f'),('2000000',28,'f'),('3',20,'f'),('1.5',52,'I'),('nan',24,'f')):
                 with self.assertRaises(ValueError):parse_target(text,offset,fmt)
             self.assertEqual(parse_target('1.5',20,'f'),1.5)
-        def talent_memory(self,offsets=(100,300,500),cap=51):
-            memory=bytearray(1000)
-            forms=[bytes.fromhex('bf33000000'),bytes.fromhex('b833000000'),bytes.fromhex('41b933000000')]
-            sites=[]
-            for offset,form in zip(offsets,forms):
-                memory[offset:offset+len(form)]=form;sites.append(dict(rva=offset,original=form.hex()))
-            class Code:
-                def __init__(inner):inner.memory=memory;inner.writes=0
-                def read(inner,address,size):return bytes(memory[address:address+size])
-                def write_code(inner,address,data):memory[address:address+len(data)]=data;inner.writes+=1
-            return Code(),sites,memory
-        def test_talent_patch_bytes_replace_only_the_constant(self):
-            self.assertEqual(talent_patch_bytes('bf33000000',150).hex(),'bf96000000')
-            self.assertEqual(talent_patch_bytes('41b933000000',150).hex(),'41b996000000')
-            with self.assertRaises(ValueError):talent_patch_bytes('bf34000000',150)
-            with self.assertRaises(ValueError):talent_patch_bytes('bf33000000',0)
-            with self.assertRaises(ValueError):talent_patch_bytes('bf33000000',1000)
-        def test_talent_apply_and_restore_round_trip_and_state(self):
-            code,sites,memory=self.talent_memory()
-            self.assertEqual(talent_state(code,0,sites),(0,3,None))
-            self.assertEqual(set_talent_cap(code,0,sites,150),3)
-            self.assertEqual(talent_state(code,0,sites),(3,3,150));self.assertEqual(bytes(memory[100:105]),bytes.fromhex('bf96000000'))
-            set_talent_cap(code,0,sites,51);self.assertEqual(talent_state(code,0,sites),(0,3,None));self.assertEqual(bytes(memory[300:305]),bytes.fromhex('b833000000'))
-        def test_talent_patch_refuses_the_wrong_game_version_and_rolls_back(self):
-            code,sites,memory=self.talent_memory()
-            memory[500:506]=bytes.fromhex('90909090909090')[:6]  # last spot is different code
-            before=bytes(memory)
-            with self.assertRaises(RuntimeError):set_talent_cap(code,0,sites,150)
-            self.assertEqual(bytes(memory),before)  # nothing was written
-            code2,sites2,memory2=self.talent_memory()
-            original_write=code2.write_code;calls=[]
-            def failing(address,data):
-                calls.append(address)
-                if len(calls)==3:raise OSError('write failed')
-                original_write(address,data)
-            code2.write_code=failing;snapshot=bytes(memory2)
-            with self.assertRaises(OSError):set_talent_cap(code2,0,sites2,150)
-            self.assertEqual(bytes(memory2),snapshot)  # the two spots already written were rolled back
-        def test_known_build_sites_come_from_the_old_script_and_learned_ones_win(self):
-            known=next(iter(KNOWN_TALENT_SITES))
-            self.assertEqual(len(talent_sites_for({},known.upper())),3);self.assertEqual(talent_sites_for({},'0'*64),[])
-            data={'learned_builds':{known:{'talent_sites':[dict(rva=1,original='bf33000000')]}}}
-            self.assertEqual(talent_sites_for(data,known),[dict(rva=1,original='bf33000000')])
         def test_auto_waits_for_progress(self):
             backend,clock,engine=self.recovery_fixture()
             self.assertEqual(engine.step()['state'],'waiting_progress')
@@ -3069,7 +2873,7 @@ if __name__ == '__main__':
         elif command in ('--help','-h','help'):
             print('setup --game PATH --name NAME (first time) | Preferred: (no arguments) = window | --background = silent watcher | auto | new-game [--apply] | status | stop')
             print('Manual: resolve-name | discover-name --name <character> | named-core --seconds 600 --background')
-            print('Diagnostics: talents apply|restore|status | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
+            print('Diagnostics: relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
             print('Each argument-based command accepts --help. Legacy start/apply-host were removed (they paused the game).')
         elif command in ('start','_worker','apply-host'):
             raise RuntimeError('Legacy process-pausing commands were removed. Use: auto --background')
@@ -3108,7 +2912,6 @@ if __name__ == '__main__':
                     with mutex('writer',0):named_core()
         elif command == 'self-test': self_test()
         elif command == 'gui':gui()
-        elif command == 'talents':talents_command()
         elif command == 'setup':setup_command()
         elif command in ('version','--version'):print(f'{APP_NAME} {VERSION}')
         elif command == 'relayout':relayout()

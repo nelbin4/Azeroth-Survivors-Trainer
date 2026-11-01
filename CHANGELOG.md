@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.5.0 — 2026-11-01
+
+- **Removed the talent cap** (migrated from `talent_150.py` in 1.4.0): the Talents box, the `talents` command, the code-patching helper and their tests. On the current game build the cap is a computed value, not a constant in the code, and a read-only search found no stored value to edit; patching instructions crashed the game. The findings stay in the technical notes.
+
 ## 1.4.2 — 2026-11-01
 
 - **Removed "Find talent spots".** Running it on the current game build crashed the game twice with the same heap-corruption error: it temporarily changed the number 51 to 150 in candidate instructions, and the very first candidates are loop and table bounds, not a talent cap. The talent cap itself (Apply / Restore) stays, but it only works for game builds whose three code spots are known; the current build is not one of them.

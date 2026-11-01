@@ -70,7 +70,7 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 
 - **Automatic character detection.** Finds your character in memory by structure, not by a fixed name. In a solo run it is the only character; when hosting with others it picks the one listed first in your player frame (read from a background capture). Names it has seen are remembered.
 - **Stat trainer.** Keeps these at your targets: max and current HP, damage, haste, crit, crit damage, speed, pickup range, experience, armor, regeneration, area, luck, gold bonus, extra targets, echo, kill heal, buff power, DoT stacks, DoT haste and the gold wallet. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups. The shipped targets are 9999-style maximums, except speed (+50%) and experience (+200%), which you can raise in `session.json`. See Limitations for what is not covered.
-- **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only. The talent cap option (only for game builds whose spots are known) rewrites one number in three of the game's instructions in memory (nothing on disk); closing the game undoes it.
+- **No pausing, no debugger, no injection.** It uses ordinary read/write process memory access only.
 - **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
 - **Menu / lobby awareness.** While no run is active the state says *in menu* or *in lobby* instead of just waiting.
 - **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
@@ -95,7 +95,6 @@ At startup (the window, or `--background`) the trainer checks GitHub for a newer
 | `python game.py stop` | Stops any running watcher. |
 | `python game.py relayout --hp 807 --damage 104 ...` | Learns moved stat offsets after a game update, from the values on your character sheet (read-only). |
 | `python game.py find-wallet --gold 1234` | Learns the gold counter's location from an exact gold amount (read-only). |
-| `python game.py talents apply --cap 150` | Raises the talent point cap in the running game, only for game builds whose spots are known (not the newest one). Also `restore` and `status`. |
 | `python game.py self-test` | Runs the built-in test suite. |
 | `python game.py --version` | Shows the version. |
 
@@ -121,7 +120,6 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **Windows build only.** The browser version is not supported.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Target values live in `session.json` (`config.targets`); a displayed `+N%` is the multiplier `1 + N/100` (for example +200% experience = 3.0). Speed is locked at +50%; experience may be set from 1 to 1,000,000. Extreme values can make the game misbehave (for example many level-ups per second).
-- **The talent cap does not work on the newest game build.** It needs to know three code spots that move with every game update, and they are not known for the current build (`71e5f176…`). An earlier search feature that tried to find them crashed the game and was removed. The Talents box says so instead of doing anything.
 - **Not covered:** lives, thorns, lifesteal and pet damage. Lives, thorns and lifesteal were not found as editable values at all in the character's data (they appear to exist only once you own something that grants them); pet damage is simply not applied. Vs elites and DoT stacks are covered, but the game resets them whenever the trainer is not running, so keep the watcher running.
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.
@@ -148,7 +146,7 @@ python build_exe.py --console  # console build, handy for testing commands
 ```
 
 ```bash
-python game.py self-test    # 47 tests, no game required
+python game.py self-test    # 43 tests, no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.
