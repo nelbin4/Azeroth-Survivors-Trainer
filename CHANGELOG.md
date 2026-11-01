@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.8.0 — 2026-11-01
+
+- **Supports the newest game build (`eb7447…`)** with no learning wait. Its layout is read from the character sheet and shipped with the trainer. Verified live: the trainer finds your character on its own and keeps these stats at your targets: health, damage, crit, crit damage, speed, pickup, experience, armor, regeneration, area, gold bonus, extra targets, echo and current health.
+- **No character name anywhere.** The trainer finds your character by structure; `setup --name` is gone and the window shows only your level.
+- **Not applied on this build yet:** haste, luck, kill heal, buff power, DoT, Vs Elites and the gold wallet (their locations are not confirmed).
+- **Faster, correct learning on unseen builds.** The name is now read off the screen instead of guessed from stale memory (it used to lock onto words like "in"), and the window says what it is waiting for.
+
 ## 1.7.2 — 2026-11-01
 
 - **Simpler window.** Status card, a *Raise talent cap* checkbox, and the *Max talents* picker with Create save. Everything else (Mode switch, cap number, Saves folder, What's new, stat targets, Log, Settings) is folded under **More**. The cap checkbox applies the cap now and every time the game starts, and unticking it restores 51.

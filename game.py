@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.7.2'
+VERSION = '1.8.0'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -62,42 +62,68 @@ def actor_snapshot(memory,process,base,recipe,name,expected_id=None,health_ceili
     """One contiguous actor snapshot plus name/vector and identity rechecks."""
     if base%4 or not 0x10000<=base<0x7ffffffff000:raise ValueError('Invalid actor address.')
     delta=recipe['stats_offset']-recipe['name_header_offset']
-    owner_off=recipe.get('owner_offset',968);header=base-delta;size=delta+owner_off+24
+    plain=bool(recipe.get('no_owner'))  # layouts without a verified modifier list: stats only
+    level_off=recipe.get('level_offset',104);id_off=recipe.get('id_offset',-24)
+    owner_off=0 if plain else recipe.get('owner_offset',968);header=base-delta
+    size=delta+(max(r[1] for r in recipe['targets'])+4 if plain else owner_off+24)
     raw=memory.read_bytes(header,size)
     cap,name_pointer,length=struct.unpack_from('<3Q',raw)
-    encoded=name.encode('utf-8')
-    if length!=len(encoded) or not length<=cap<=256 or not 0x10000<=name_pointer<0x7ffffffff000:
-        raise ValueError('Invalid character-name header.')
-    if memory.read_bytes(name_pointer,length)!=encoded:raise ValueError('Character name does not match.')
+    if name is None:
+        # Name-free: any well-formed text header at the right distance is accepted; the text is only a structural anchor.
+        if not 2<=length<=24 or not length<=cap<=256 or not 0x10000<=name_pointer<0x7ffffffff000:raise ValueError('Invalid character-name header.')
+        encoded=memory.read_bytes(name_pointer,length)
+        try:name=encoded.decode('utf-8')
+        except UnicodeDecodeError:raise ValueError('Invalid character-name header.')
+        import re
+        if not re.fullmatch(r"[^\W\d_][\w' -]*",name):raise ValueError('Invalid character-name header.')
+    else:
+        encoded=name.encode('utf-8')
+        if length!=len(encoded) or not length<=cap<=256 or not 0x10000<=name_pointer<0x7ffffffff000:
+            raise ValueError('Invalid character-name header.')
+        if memory.read_bytes(name_pointer,length)!=encoded:raise ValueError('Character name does not match.')
     def u(off):return struct.unpack_from('<I',raw,delta+off)[0]
     def f(off):return struct.unpack_from('<f',raw,delta+off)[0]
-    player_id=u(-24);level=u(104)
+    hp_off=next((t[1] for t in recipe['targets'] if t[0]=='Current Health'),112)
+    player_id=u(id_off);level=u(level_off)
     if not player_id or (expected_id is not None and player_id!=expected_id) or not 1<=level<=10000:
         raise ValueError('Actor identity or level changed.')
-    for off in list(range(0,52,4))+[56,60,64,72,112]:
-        if not math.isfinite(f(off)) or not 0<=f(off)<=1e7:raise ValueError('Invalid actor stat.')
-    if f(0)<1 or u(52)>100000 or u(68)>100000:raise ValueError('Invalid health cap or counter.')
-    if f(112)>f(0)+1:
+    if plain:
+        for entry in recipe['targets']:
+            if entry[2]=='f' and (not math.isfinite(f(entry[1])) or not 0<=f(entry[1])<=1e7):raise ValueError('Invalid actor stat.')
+    else:
+        for off in list(range(0,52,4))+[56,60,64,72,112]:
+            if not math.isfinite(f(off)) or not 0<=f(off)<=1e7:raise ValueError('Invalid actor stat.')
+    if f(0)<1 or (not plain and (u(52)>100000 or u(68)>100000)):raise ValueError('Invalid health cap or counter.')
+    if f(hp_off)>f(0)+1:
         # Only a known, previously injected actor is eligible for this transition.
-        if health_ceiling is None or f(112)>health_ceiling+.01:
+        if health_ceiling is None or f(hp_off)>health_ceiling+.01:
             raise ValueError('HP exceeds its current cap without an injection lease.')
-    capacity,pointer,count=struct.unpack_from('<3Q',raw,delta+owner_off)
-    if not 1<=count<=capacity<=256 or pointer%4 or not 0x10000<=pointer<0x7ffffffff000:
-        raise ValueError('Invalid modifier ownership.')
-    vector=memory.read_bytes(pointer,count*8)
-    kinds=[];amounts=[]
-    for index in range(count):
-        kind=vector[index*8];amount=struct.unpack_from('<f',vector,index*8+4)[0]
-        if kind>64 or not math.isfinite(amount) or abs(amount)>1e6:raise ValueError('Invalid source entry.')
-        kinds.append(kind);amounts.append(amount)
+    if plain:capacity=pointer=count=0;kinds=[];amounts=[]
+    else:
+        capacity,pointer,count=struct.unpack_from('<3Q',raw,delta+owner_off)
+        if not 1<=count<=capacity<=256 or pointer%4 or not 0x10000<=pointer<0x7ffffffff000:
+            raise ValueError('Invalid modifier ownership.')
+        vector=memory.read_bytes(pointer,count*8)
+        kinds=[];amounts=[]
+        for index in range(count):
+            kind=vector[index*8];amount=struct.unpack_from('<f',vector,index*8+4)[0]
+            if kind>64 or not math.isfinite(amount) or abs(amount)>1e6:raise ValueError('Invalid source entry.')
+            kinds.append(kind);amounts.append(amount)
     check=memory.read_bytes(header,size)
-    if raw[:24]!=check[:24] or raw[delta-24:delta-20]!=check[delta-24:delta-20] or raw[delta+owner_off:delta+owner_off+24]!=check[delta+owner_off:delta+owner_off+24]:
+    if raw[:24]!=check[:24] or raw[delta+id_off:delta+id_off+4]!=check[delta+id_off:delta+id_off+4] or (not plain and raw[delta+owner_off:delta+owner_off+24]!=check[delta+owner_off:delta+owner_off+24]):
         raise ValueError('Actor moved during snapshot.')
     if memory.read_bytes(name_pointer,length)!=encoded:raise ValueError('Name changed during snapshot.')
     values={entry[0]:struct.unpack_from('<'+entry[2],raw,delta+entry[1])[0] for entry in recipe['targets']}
     return dict(pid=process.pid,created=process.create_time(),base=base,player_id=player_id,name=name,
                 level=level,owner=base+owner_off,pointer=pointer,capacity=capacity,length=count,kinds=kinds,
-                amounts=amounts,values=values,hp_transition=f(112)>f(0)+1)
+                amounts=amounts,values=values,hp_transition=f(hp_off)>f(0)+1)
+
+KNOWN_LAYOUTS = {
+    # Game build eb7447...: stats 912 bytes after the name header, level at -104 (provisional), no verified modifier list yet, so only these stats are written.
+    'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':dict(delta=912,no_owner=True,level_offset=-104,id_offset=-144,
+        skip_offsets=[8,44,60,64,68,72,120],
+        field_offsets={'Regeneration':40,'Area':44,'Gold Bonus':52,'Targets':56,'Echo':60,'Current Health':116},source='read off the character sheet'),
+}
 
 LEARN_FLOATS = (0,4,8,12,16,20,28,32,36,44,48,60,64,72,112)
 
@@ -134,6 +160,34 @@ def learn_deltas(memory,process,header,recipe,name):
             wallet=struct.unpack_from('<I',raw,d+120)[0]
             snap['skip']=[] if wallet<=10000000 else [120]
             found.append(((d,o),snap))
+    return found
+
+def find_plain(memory,process,recipe,cancelled=lambda:False,budget=40.):
+    """Read-only, name-free: every record with a text header at the known distance and a plausible stat block."""
+    import numpy as np
+    delta=recipe['stats_offset']-recipe['name_header_offset'];lvl=recipe['level_offset'];idoff=recipe['id_offset']
+    reach=max(r[1] for r in recipe['targets'])+4;span=delta+reach;found=[];deadline=time.monotonic()+budget
+    for region in memory.snapshot_memory_regions():
+        if not(region.is_readable and region.is_writable and not region.is_executable):continue
+        for address in range(region.address,region.address+region.size,4194304):
+            if cancelled():raise InterruptedError('Stop requested.')
+            if time.monotonic()>=deadline:return found
+            try:raw=memory.read_bytes(address,min(4194304+span,region.address+region.size-address))
+            except Exception:continue
+            v=np.frombuffer(raw[:len(raw)//8*8],dtype='<u8')
+            if len(v)<3:continue
+            cap,ptr,length=v[:-2],v[1:-1],v[2:]
+            mask=(length>=2)&(length<=24)&(cap>=length)&(cap<=256)&(ptr>=0x10000)&(ptr<0x7ffffffff000)
+            idx=np.flatnonzero(mask);idx=idx[idx*8<4194304]
+            base=idx*8+delta;ok=(base+reach<=len(raw))&(base+lvl>=0)&(base+idoff>=0)
+            idx,base=idx[ok],base[ok]
+            u32=np.frombuffer(raw[:len(raw)//4*4],dtype='<u4');f32=u32.view('<f4')
+            with np.errstate(all='ignore'):
+                keep=(u32[(base+lvl)//4]>=1)&(u32[(base+lvl)//4]<=10000)&(u32[(base+idoff)//4]!=0)&(f32[base//4]>=100)&(f32[base//4]<=1e7)
+            for i,b in zip(idx[keep],base[keep]):
+                try:snap=actor_snapshot(memory,process,address+int(b),recipe,None)
+                except Exception:continue
+                if sum(abs(x)>1e-3 for x in snap['values'].values())>=9:found.append(snap)
     return found
 
 def find_characters(memory,process,recipe,cancelled=lambda:False,budget=40.):
@@ -175,7 +229,7 @@ class AutoBackend:
         # A pinned name (setup --name) is used as is. Otherwise the name is re-detected for every run:
         # players can rename their character in the lobby at any time.
         self.pinned=bool(pinned) and not pinned.startswith('<');self.name=pinned if self.pinned else None
-        self.detect_next=0;self.ambiguous_names=None;self.scene=None;self.scene_next=0;self.scene_busy=False
+        self.detect_next=0;self.bad_names=set();self.ambiguous_names=None;self.scene=None;self.scene_next=0;self.scene_busy=False
         if self.recipe.get('build','').lower()!=data['game_sha256'].lower():raise AutoBlocked('Identity recipe/build mismatch.')
         targets=[t for t in data['config']['targets'] if t[1] in AUTO_CORE_OFFSETS]
         if len(targets)!=len(AUTO_CORE_OFFSETS) or {t[1] for t in targets}!=AUTO_CORE_OFFSETS:
@@ -220,7 +274,7 @@ class AutoBackend:
         self.hints.update(int(h['base']) for h in read().get('auto_hints',[]) if h.get('build','').lower()==digest and h.get('name')==self.name)
         if digest==self.data['game_sha256'].lower():
             self.set_layout(None);self.learning=False;return
-        learned=read().get('learned_builds',{}).get(digest)
+        learned=read().get('learned_builds',{}).get(digest) or KNOWN_LAYOUTS.get(digest)
         if learned and 'delta' in learned:
             self.set_layout(learned)
             self.learning=False
@@ -230,7 +284,9 @@ class AutoBackend:
         recipe=dict(self.base_recipe);skip=set();moved={}
         if learned:
             moved=dict(learned.get('field_offsets',{}))
-            recipe.update(stats_offset=recipe['name_header_offset']+learned['delta'],owner_offset=learned['owner_offset'],build=self.build)
+            recipe.update(stats_offset=recipe['name_header_offset']+learned['delta'],build=self.build)
+            if learned.get('no_owner'):recipe.update(no_owner=True,level_offset=learned['level_offset'],id_offset=learned['id_offset'])
+            else:recipe.update(owner_offset=learned['owner_offset'])
             skip=set(learned.get('skip_offsets',[]))
             if 'wallet_offset' in learned:skip.discard(120);moved['Gold Wallet']=learned['wallet_offset']
         self.targets=[(n,moved.get(n,off),f,v) for n,off,f,v in self.base_targets if off not in skip and moved.get(n,off)!=-1]
@@ -274,6 +330,7 @@ class AutoBackend:
         layouts={key[1] for key in results}
         if len(layouts)!=1:
             self.learn_samples=[];self.learn_headers=None
+            if not results and not self.pinned:self.bad_names.add(self.name);self.name=None;self.detect_next=0  # not a character: try the next name on screen
             return dict(state='learning',phase='ambiguous' if results else 'no_match',matches=len(results))
         # Several copies of one record share a layout; the layout is what is learned (record choice stays strict at runtime).
         (header,(d,o)),snap=min(results.items(),key=lambda item:item[0][0])
@@ -340,6 +397,12 @@ class AutoBackend:
         """No usable name yet (or it was not found): look for any valid character record and adopt its name."""
         if now<self.detect_next:return []
         self.detect_next=now+10
+        if self.learning and not self.pinned:
+            # An unseen build: the saved layout cannot find records (it matches junk such as "in"), so read the name off the screen.
+            try:names=[n for n in window_name_candidates(self.process.pid) if n not in self.bad_names]
+            except Exception:names=[]
+            self.ambiguous_names=None;self.name=names[0] if names else None
+            return []
         recipe=dict(self.recipe,targets=self.targets)
         found=find_characters(self.memory,self.process,recipe,cancelled=lambda:self.signal.wait(0))
         names=sorted({c['name'] for c in found})
@@ -356,7 +419,26 @@ class AutoBackend:
         update_session(remember)
         mine=[c for c in found if c['name']==chosen];self.hints.update(c['base'] for c in mine)
         return mine
+    def seek_plain(self,now):
+        found={}
+        for base in sorted(self.hints):
+            if self.signal.wait(0):raise InterruptedError('Stop requested.')
+            try:found[base]=self.at(base)
+            except Exception:pass
+        if found:return list(found.values())
+        if now<self.detect_next:return []
+        self.detect_next=now+10
+        candidates=find_plain(self.memory,self.process,dict(self.recipe,targets=self.targets),cancelled=lambda:self.signal.wait(0))
+        self.hints.update(c['base'] for c in candidates)
+        names={c['name'] for c in candidates}
+        if len({c['player_id'] for c in candidates})>1:
+            try:chosen=window_player_name(self.process.pid,sorted(names))
+            except Exception:chosen=None
+            if chosen:candidates=[c for c in candidates if c['name']==chosen]
+            else:self.ambiguous_names=sorted(names)
+        return candidates
     def seek(self,now):
+        if self.recipe.get('no_owner'):return self.seek_plain(now)
         if self.name is None:return self.detect_character(now)
         found={}
         for base in sorted(self.hints):
@@ -2142,6 +2224,18 @@ def window_player_name(pid,names):
             if fuzzy_in(text.lower(),name.lower()):return name
     return None
 
+NAME_STOPWORDS = {'gold','damage','done','level','boss','next','lobby','menu','options','kills','time','exp','wave','host','players','player','you','the','and'}
+
+def window_name_candidates(pid):
+    """Names shown top-left in the player frame, nearest the top first (single-word OCR lines only)."""
+    import re
+    handle=game_window(pid)
+    if not handle:return []
+    path=shot_path('name')
+    width,height=capture_window(handle,path)
+    lines=sorted((y1,t.strip()) for x1,y1,x2,y2,t in ocr_lines(path) if x1<width*.3 and y1<height*.25)
+    return [t for _,t in lines if re.fullmatch(r"[^\W\d_][\w'-]{2,23}",t) and t.lower() not in NAME_STOPWORDS]
+
 def detect_scene(lines,width,height):
     """What is on screen? 'level_up', 'lobby', 'menu' or 'unknown', from OCR lines (x1,y1,x2,y2,text)."""
     import re
@@ -2559,15 +2653,14 @@ def ensure_configured():
 def setup_command():
     parser=argparse.ArgumentParser(description='First-time setup: where the game is and which character to manage.')
     parser.add_argument('--game',required=True,help='Full path to AzerothSurvivors.exe')
-    parser.add_argument('--name',default='',help='Character name exactly as shown in game; leave out to detect it automatically')
-    args=parser.parse_args(sys.argv[2:]);configure(args.game,args.name)
-    print(f'{APP_NAME} configured for '+(f'"{args.name}"' if args.name else 'automatic character detection')+'. Open the window with: python game.py')
+    args=parser.parse_args(sys.argv[2:]);configure(args.game,None)
+    print(f'{APP_NAME} configured. Open the window with: python game.py')
 
 def effective_targets(data,digest):
     """(name, offset, fmt, value) the watcher uses for this build; unverified fields are left out."""
     base=data['config']['targets']
     if digest==data['game_sha256'].lower():return [tuple(t) for t in base]
-    learned=data.get('learned_builds',{}).get(digest)
+    learned=data.get('learned_builds',{}).get(digest) or KNOWN_LAYOUTS.get(digest)
     if not learned or 'delta' not in learned:return []
     moved=dict(learned.get('field_offsets',{}));skip=set(learned.get('skip_offsets',[]))
     if 'wallet_offset' in learned:skip.discard(120);moved['Gold Wallet']=learned['wallet_offset']
@@ -2594,6 +2687,13 @@ def describe_state(monitor,state):
         'stopped':'Stopped. Press Start to apply your stats.',
     }
     text=sentences.get(state,state.replace('_',' ').capitalize())
+    phase=monitor.get('phase')
+    if state=='learning':
+        text={'need_name':'Learning this new game version. Waiting to read your character name on screen (leave the player frame visible).',
+              'scan':'Learning this new game version: searching the game for your character...',
+              'confirming':'Learning this new game version: confirming what was found...',
+              'no_match':'This game version stores your character differently and could not be matched yet. See the Log and the README.',
+              'ambiguous':'This game version could not be matched unambiguously yet.'}.get(phase,text)
     if state in ('applying','waiting_progress') and monitor.get('trace_only'):text='Observe only: reading your character without changing anything.'
     return text
 
@@ -2841,7 +2941,7 @@ class WatcherWindow:
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.headline.set(STATE_TITLES.get(state,state.replace('_',' ').capitalize()));self.dot.itemconfigure(self.dot_id,fill=self.COLORS.get(state,'#6b6b6b'))
             level=monitor.get('level')
-            self.sub.set(f"{monitor.get('character') or 'Detecting character'}, level {level}" if level and alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
+            self.sub.set(f"Level {level}" if level and alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
             self.toggle_button.configure(text='Stop' if alive else 'Start')
             if not self.busy and time.monotonic()>=getattr(self,'talent_next',0):
                 self.talent_next=time.monotonic()+4;self.talent_status.set(self.describe_talents(data))
@@ -2967,6 +3067,29 @@ def self_test():
             memory.snapshot_memory_regions=lambda:[Region()]
             found=find_characters(memory,proc,dict(recipe,owner_offset=968))
             self.assertEqual([(c['name'],c['player_id']) for c in found],[('Nelbin',777)])
+        def test_stats_only_layout_is_found_without_a_name(self):
+            BASE=0x100000;H=0x100200;mem=bytearray(0x20000)
+            def put(address,data):mem[address-BASE:address-BASE+len(data)]=data
+            put(0x108000,b'Anyone');put(H,struct.pack('<3Q',8,0x108000,6))
+            b=H+912;put(b-144,struct.pack('<I',13863894));put(b-104,struct.pack('<I',35))
+            names=dict(zip(('Max Health','Damage','Crit','Crit Damage','Speed','Pickup','Experience','Armor','Regeneration','Area','Gold Bonus','Echo','Current Health'),(0,4,12,16,20,24,28,32,40,44,52,60,116)))
+            for name,off in names.items():put(b+off,struct.pack('<f',500. if off in (0,116) else 1.5))
+            put(b+56,struct.pack('<I',1))
+            class Memory:
+                def read_bytes(_,address,size):
+                    if not(BASE<=address and address+size<=BASE+len(mem)):raise OSError('unreadable')
+                    return bytes(mem[address-BASE:address-BASE+size])
+                def snapshot_memory_regions(_):
+                    class Region:address=BASE;size=len(mem);is_readable=True;is_writable=True;is_executable=False
+                    return [Region()]
+            class Proc:
+                pid=1
+                def create_time(_):return 5.
+            targets=[(n,o,'f',1.) for n,o in names.items()]+[('Targets',56,'I',9)]
+            recipe=dict(name_header_offset=432,stats_offset=432+912,no_owner=True,level_offset=-104,id_offset=-144,targets=targets)
+            found=find_plain(Memory(),Proc(),recipe)
+            self.assertEqual([(c['name'],c['level'],c['base']) for c in found],[('Anyone',35,b)])
+            self.assertEqual(found[0]['kinds'],[])
         def test_character_detection_ignores_non_characters(self):
             memory,proc,header,recipe,name=self.layout_fixture(d=900,o=968)  # stats where the recipe does not expect them
             class Region:

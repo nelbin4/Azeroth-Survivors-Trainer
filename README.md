@@ -60,7 +60,7 @@ python game.py
 
 The window opens first and asks once for the path to `AzerothSurvivors.exe` (if you cancel, press **Locate game** later). It never asks for a character name: the trainer detects your character itself, so switching characters needs no setup. You can rename your character in the lobby whenever you like; the name is re-detected for every run. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage.
 
-Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`, adding `--name YourCharacter` if you want to pin one. Your settings are stored in `session.json` next to the program and are never uploaded.
+Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`. Your settings are stored in `session.json` next to the program and are never uploaded.
 
 > ### Solo or host only — do not use it when joining a game
 > Use this trainer **only in a solo run, or in a game you are hosting**. Do **not** use it when you join someone else's game. As a guest, your stats are computed by the host and your PC only shows copies, so changes do nothing there, and tampering with a joined game can desync or disconnect you and disrupt the other players.
@@ -120,7 +120,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 ## How it stays safe
 
 1. Finds the game by exact executable path and checks its SHA-256. An unknown build triggers read-only learning, never blind writes.
-2. Identifies your character by its length-checked name (configured or auto-detected), then validates player ID, level, plausible stats and the modifier table.
+2. Identifies your character by structure (no name needed), then validates player ID, level, plausible stats and the modifier table.
 3. Backs up original bytes before the first write, checks ownership before each write, and verifies by readback. On failure it conditionally restores only bytes it wrote.
 4. A single odd reading never resets state; a level drop must be seen twice before the run is treated as new, and writes pause meanwhile.
 5. If the character is ambiguous (several valid copies), it picks the one that actually changes, or refuses to write.
@@ -134,6 +134,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **Max talents use a signed copy of your save.** The trainer finds the game's own save key inside the game file and accepts it only if it authenticates your current save; it refuses to write anything if the game's talent table does not match the talents already in your save. It never edits `characters.txt` itself.
 - **Talent cap:** it is applied to the running game only, so it is applied again every time the game starts while *Raise talent cap* is ticked. The small "51 at most" text on the talents screen is a fixed label and keeps saying 51; the points you can spend are what change. Reopen the Talents tab after applying so the screen redraws. Each game update can move the code the cap lives in; the trainer finds it again from the game file and refuses to touch the game if what it finds does not fit.
 - **Not covered:** lives, thorns, lifesteal and pet damage. Lives, thorns and lifesteal were not found as editable values at all in the character's data (they appear to exist only once you own something that grants them); pet damage is simply not applied. Vs elites and DoT stacks are covered, but the game resets them whenever the trainer is not running, so keep the watcher running.
+- **Newest game build:** health, damage, crit, crit damage, speed, pickup, experience, armor, regen, area, gold bonus, extra targets and echo are applied. Haste, luck, kill heal, buff power, DoT, Vs Elites and the wallet are not yet (their places in that build are unconfirmed).
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.
 
@@ -141,8 +142,8 @@ The trainer never records your screen. Only while **no run is active** it reads 
 
 - **"Not configured yet"** — run the window once, or `setup`.
 - **State "in menu" / "in lobby"** — no run is active yet, and the trainer can tell which screen you are on (read from a background capture). Start a run and it takes over.
-- **State stays "seeking record"** — you are probably in a lobby or in someone else's game (not supported). If you pinned a name, make sure it matches exactly, or clear it by running `setup` again without `--name`.
-- **State "blocked ambiguous" with several names** — more than one character is in the game and yours could not be told apart; pin your name with `setup --name`.
+- **State stays "seeking record"** — you are probably in a lobby or in someone else's game (not supported).
+- **State "blocked ambiguous"** — more than one character is in the game (a hosted lobby) and yours could not be told apart; keep the player frame visible on screen and it is picked from there.
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
 - **The exe does not start** — keep `game.py` in the same folder as the exe; the message box tells you if it is missing. Antivirus or SmartScreen may need an exception for an unsigned program.
