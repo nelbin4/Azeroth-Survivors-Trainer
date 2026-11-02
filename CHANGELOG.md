@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.0.1 (experimental)
+
+- Damage and Area are applied on game build `0e8e…` in every run: Damage is pinned, and Area is pinned at the field verified against the character sheet.
+- Area's field is found by reading the sheet's percentage and matching it to memory; the offset is kept per game version.
+- Nothing is written in the lobby or menu, and the watcher re-applies after level-ups.
+- Simpler window: Talents is a button that opens its own dialog; status text and counters are removed.
+
 ## 2.0.0 (experimental)
 
 - **Fix: the Damage and Area hook never started.** The hook's lock and its stop event shared one Windows name, so starting it failed with "The handle is invalid". The lock now has its own name.

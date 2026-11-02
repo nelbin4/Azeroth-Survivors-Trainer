@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.0'
+VERSION = '2.0.1'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -238,6 +238,7 @@ def find_characters(memory,process,recipe,cancelled=lambda:False,budget=40.):
 CORE_CHUNK = 4194304
 CORE_FIELDS = {  # extra stats pinned in pattern mode, per game build (offsets read off the character sheet)
     'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':{'Area':44},
+    '0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274':{'Area':44},  # the game executable this trainer runs against
 }
 
 def core_window_ok(values):
@@ -305,16 +306,54 @@ def core_live(memory,bases,seconds=4.5):
     """
     return []
 
+HOOK_BUILDS = {'0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274'}  # game executable SHA-256 values the hook's instruction offsets were verified against
+
+def hook_source(base,name=None):
+    return r'''const p=ptr(BASE), module=Process.getModuleByName('Azerothsurvivors.exe');
+const name=NAME, header=p.sub(912);
+function valid(){try {let cap=header.readU64().toNumber(), len=header.add(16).readU64().toNumber();
+ return len>0 && len<=24 && cap>=len && cap<=256 && (name===null ? header.add(8).readPointer().readUtf8String(len)!==null : header.add(8).readPointer().readUtf8String(len)===name);
+} catch (_) {return false;}}
+function check(off,hex){let x=Array.from(new Uint8Array(module.base.add(off).readByteArray(hex.length/2))).map(b=>b.toString(16).padStart(2,'0')).join('');if(x!==hex)throw Error('Instruction mismatch; no hooks installed.');}
+if(!valid())throw Error('Character record does not match the provided name.');
+check(0x5eca29b,'f30f11b6c8050000');check(0x5eca2ac,'f3440f118ed0050000');
+check(0x5eca34c,'f30f1186f4050000');check(0x5eca354,'0f2845f0f30f1186f8050000');
+let hooks=[];try {
+ hooks.push(Interceptor.attach(module.base.add(0x5eca2ac),{onEnter(){if(this.context.rsi.add(0x5c8).equals(p)&&valid())p.add(4).writeFloat(100.99);}}));
+ hooks.push(Interceptor.attach(module.base.add(0x5eca354),{onEnter(){if(this.context.rsi.add(0x5c8).equals(p)&&valid())p.add(44).writeFloat(100.99);}}));
+ if(!valid())throw Error('Character record changed.');p.add(4).writeFloat(100.99);p.add(44).writeFloat(100.99);
+ send('Damage and Area hooks active.');
+} catch(e){hooks.forEach(h=>h.detach());throw e;}'''.replace('BASE',json.dumps(hex(base))).replace('NAME',json.dumps(name))
+
+def attach_hook(pid,base,name=None):
+    """Attach the hook to a running game and return the live Frida session. Raises when the build or instructions do not match."""
+    import frida
+    proc=psutil.Process(pid);exe=Path(proc.exe())
+    if exe.name.lower()!='azerothsurvivors.exe':raise ValueError('Not the game executable.')
+    if hashlib.sha256(exe.read_bytes()).hexdigest() not in HOOK_BUILDS:raise ValueError('Unsupported game build; no hooks installed.')
+    session=frida.attach(pid)
+    try:
+        ready=threading.Event();errors=[]
+        script=session.create_script(hook_source(base,name))
+        def receive(message,data):
+            if message['type']=='error':errors.append(message.get('description','Hook failed.'))
+            ready.set()
+        script.on('message',receive);script.load()
+        if not ready.wait(5) or errors:raise RuntimeError(errors[0] if errors else 'Hook did not start.')
+        return session
+    except BaseException:
+        session.detach();raise
+
 def hook_current():
     """Opt-in hook for a manually identified record on one verified build."""
     import frida
     parser=argparse.ArgumentParser(description='Experimental: keep Damage and Area at +9999% for a manually identified character record.')
     parser.add_argument('--pid',required=True,type=int)
     parser.add_argument('--base',required=True,type=lambda x:int(x,0))
-    parser.add_argument('--name',required=True)
+    parser.add_argument('--name',default=None,help='Optional: require this character name. Without it the record is accepted by its header structure.')
     parser.add_argument('--seconds',type=int,default=600,help='Maximum hook duration (default: 600 seconds).')
     args=parser.parse_args(sys.argv[2:])
-    if not args.name or len(args.name.encode('utf-8'))>24 or args.base<0x10000 or not 1<=args.seconds<=86400:
+    if (args.name is not None and not (1<=len(args.name.encode('utf-8'))<=24)) or args.base<0x10000 or not 1<=args.seconds<=86400:
         raise ValueError('Invalid name or stat address.')
     proc=psutil.Process(args.pid)
     exe=Path(proc.exe())
@@ -325,7 +364,7 @@ def hook_current():
     source=r'''const p=ptr(BASE), module=Process.getModuleByName('Azerothsurvivors.exe');
 const name=NAME, header=p.sub(912);
 function valid(){try {let cap=header.readU64().toNumber(), len=header.add(16).readU64().toNumber();
- return len>0 && len<=24 && cap>=len && cap<=256 && header.add(8).readPointer().readUtf8String(len)===name;
+ return len>0 && len<=24 && cap>=len && cap<=256 && (name===null ? header.add(8).readPointer().readUtf8String(len)!==null : header.add(8).readPointer().readUtf8String(len)===name);
 } catch (_) {return false;}}
 function check(off,hex){let x=Array.from(new Uint8Array(module.base.add(off).readByteArray(hex.length/2))).map(b=>b.toString(16).padStart(2,'0')).join('');if(x!==hex)throw Error('Instruction mismatch; no hooks installed.');}
 if(!valid())throw Error('Character record does not match the provided name.');
@@ -492,7 +531,7 @@ class AutoBackend:
     def bind(self,generation):
         from PyMemoryEditor import OpenProcess
         self.close();self.process=self.found_process;self.generation=generation
-        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.core_base=None;self.core_pending=[];self.core_next=0;self.core_name=None
+        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.core_base=None;self.core_pending=[];self.core_next=0;self.core_name=None;self.core_snap=None;self.area_offset=None;self.core_area_base=None;self.core_status=None
         saved=read().get('core_builds',{}).get(self.build) or {}
         if saved.get('pid')==generation[0] and saved.get('created')==generation[1]:self.core_base=saved.get('base');self.core_delta=saved.get('delta')
         self.memory=OpenProcess(pid=generation[0],permission=0x438)
@@ -501,9 +540,23 @@ class AutoBackend:
         if (lease.get('pid'),lease.get('created'),lease.get('build','').lower())==(generation[0],generation[1],self.build):
             self.injected.add((generation[0],generation[1],lease['base'],lease['player_id']))
     def close(self):
+        self.stop_hook()
         if self.memory:
             try:self.memory.close()
             finally:self.memory=None
+    def ensure_hook(self,base):
+        """Attach the Damage and Area hook to this record once per process and record; returns True when it was attached now."""
+        key=(self.generation[0],self.generation[1],base,self.memory.read_bytes(base-104,4))  # a level-up changes the key, so the hook is attached again
+        if getattr(self,'hook_key',None)==key:return False
+        self.stop_hook()
+        self.hook_session=attach_hook(self.generation[0],base);self.hook_key=key
+        return True
+    def stop_hook(self):
+        session=getattr(self,'hook_session',None)
+        if session is not None:
+            try:session.detach()
+            except Exception:pass
+        self.hook_session=None;self.hook_key=None
     def reset_scan(self):
         self.regions=[];self.region_index=0;self.offset=0;self.scan_found={};self.scan_errors=0;self.scan_bytes=0;self.scan_complete=False
     def snapshot(self,candidate):
@@ -568,22 +621,35 @@ class AutoBackend:
         raw=self.memory.read_bytes(base,32);values=struct.unpack('<8f',raw)
         if not core_window_ok(values):raise ValueError('Stat block changed.')
         if not core_headers(self.memory,base):raise ValueError('Text header missing.')  # any header: nearby text changes as the game runs
-        return dict(pid=self.process.pid,created=self.process.create_time(),base=base,player_id=1,name='',level=0,values={'Damage':values[1],'Max Health':values[0]},
+        return dict(pid=self.process.pid,created=self.process.create_time(),base=base,player_id=1,name='',level=struct.unpack('<I',self.memory.read_bytes(base-104,4))[0],values={'Damage':values[1],'Max Health':values[0]},
                     pointer=0,capacity=0,length=0,kinds=[],amounts=[])
     def seek_core(self,now):
         if self.core_base:
             try:return [self.core_candidate(self.core_base)]
             except Exception:self.core_base=None
-        if self.core_pending:
-            live=core_live(self.memory,[b for b,_ in self.core_pending],3.)
+        if self.core_pending:  # keep watching the same copies; a rescan would restart the 10-second comparison
+            live=self.core_watch([b for b,_ in self.core_pending])
             if live:return self.core_found(live)
+            return []
         if now<self.core_next:return []
         self.core_next=now+8
         found=core_scan(self.memory,cancelled=lambda:self.signal.wait(0),first=[b for b,_ in self.core_pending])
-        self.core_pending=found
-        if not found:return []
-        live=core_live(self.memory,[b for b,_ in found])
-        return self.core_found(live) if live else []
+        # Only records with a plausible level and a text header can be the player's; the rest are other data that happens to match the stat pattern.
+        found=[(b,d) for b,d in found if 1<=struct.unpack('<I',self.memory.read_bytes(b-104,4))[0]<=10000 and core_header_hits(self.memory,b)]
+        self.core_pending=found;self.core_snap=None
+        return []
+    def core_watch(self,bases):
+        """Read-only: the live copy is the one whose stats move during play; stale copies stay still.
+        Compares against a snapshot taken 10 s earlier, since the live stats change only every few seconds."""
+        snap={b:self.memory.read_bytes(b,32) for b in bases}
+        started,before=self.core_snap or (time.monotonic(),None)
+        if time.monotonic()-started<10:
+            self.core_snap=(started,before) if before is not None else (started,snap)
+            return []
+        self.core_snap=None
+        if before is None:return []
+        moved=[b for b in bases if before.get(b)!=snap[b]]
+        return moved if len(moved)==1 else []
     def core_found(self,live):
         delta=dict(self.core_pending)[live[0]]
         if len(live)>1:
@@ -603,8 +669,25 @@ class AutoBackend:
             d['core_builds'][digest]=dict(delta=delta,found=time.time(),pid=pid,created=created,base=base,name=name or old.get('name'))
         update_session(store)
         return [self.core_candidate(self.core_base)]
+    def verify_area(self,base):
+        """Find Area's field by matching the sheet's percentage, once per record; the offset is kept per game build for later runs."""
+        digest=self.build;saved=(read().get('core_builds',{}).get(digest) or {}).get('area_offset')
+        if saved is not None and self.core_area_base==base:self.area_offset=saved;return
+        now=time.monotonic()
+        if now<getattr(self,'sheet_next',0):return
+        self.sheet_next=now+10
+        percents=read_sheet_percents(self.process.pid)
+        if 'Area' not in percents:self.core_status='Open the character sheet so Area can be verified.';return
+        hits=find_stat_offsets(self.memory,base,percents['Area'])
+        hits=[h for h in hits if h!=4]
+        if len(hits)!=1:self.core_status=f'Area not verified: {len(hits)} fields match the sheet.';return
+        self.area_offset=hits[0];self.core_area_base=base
+        update_session(lambda d:d.setdefault('core_builds',{}).setdefault(digest,{}).update(area_offset=hits[0]))
     def core_apply(self,candidate):
-        base=candidate['base'];fields={'Damage':4,**CORE_FIELDS.get(self.build,{})};pins=[]
+        # Repoll and freeze: the game resets Damage and Area on each level-up, so they are rewritten every pass while the run is active.
+        base=candidate['base'];fields={'Damage':4};pins=[]
+        if self.area_offset is None:self.verify_area(base)
+        if self.area_offset is not None:fields['Area']=self.area_offset
         for name,offset in fields.items():
             want=next((v for n,o,f,v in self.base_targets if n==name),None)
             if want is not None and name not in self.disabled:pins.append((name,base+offset,struct.pack('<f',want),want))
@@ -762,7 +845,7 @@ class AutoRecovery:
                 self.backend.bind(generation);self.generation=generation;self.forget()
             if getattr(self.backend,'learning',False):
                 self.state=self.backend.learn(now);return self.state
-            if getattr(self.backend,'core',False):
+            if getattr(self.backend,'core',False) and self.backend.build not in HOOK_BUILDS:
                 self.state=dict(state='blocked',reason='Automatic character discovery is unavailable for this game build; no stats were changed.')
                 return self.state
             if self.candidate is None:
@@ -799,7 +882,9 @@ class AutoRecovery:
             if not self.low:self.last_level=fresh['level']
             self.candidate=fresh
             self.state=dict(state='waiting_progress',level=self.last_level,run=self.run,player_id=fresh['player_id'],base=hex(fresh['base']))
-            if self.active and self.confirmations>=2 and not self.low:  # no writes while a possible reset is unconfirmed
+            if getattr(self.backend,'core',False) and hasattr(self.backend,'refresh_scene'):self.backend.refresh_scene(now)  # keep the lobby/run reading fresh (every 10 s)
+            in_run=getattr(self.backend,'scene',None) not in (None,'lobby','menu')  # never write in the lobby or menu, even while hosting
+            if self.active and self.confirmations>=2 and not self.low and (in_run or not getattr(self.backend,'core',False)):  # no writes while a possible reset is unconfirmed
                 result=self.backend.apply(fresh);self.total_writes+=result['writes']
                 self.state.update(state='applying',last_batch=result['writes'],total_field_writes=self.total_writes,values=result.get('values',{}))
             self.failures=0
@@ -2440,6 +2525,40 @@ def window_player_name(pid,names):
 
 NAME_STOPWORDS = {'gold','damage','done','level','boss','next','lobby','menu','options','kills','time','exp','wave','host','players','player','you','the','and'}
 
+def read_sheet_percents(pid):
+    """Read-only: the Damage and Area percentages shown on the character sheet, or {} when the sheet is not on screen.
+    Each label is found on screen, then the small value beside it is read from an enlarged crop, since OCR misses small text."""
+    import re
+    from PIL import Image
+    handle=game_window(pid)
+    if not handle:return {}
+    path=shot_path('sheet');capture_window(handle,path)
+    image=Image.open(path).convert('RGB').copy()  # load first: the OCR step removes the capture file
+    lines=ocr_lines(path)
+    found={}
+    for name in ('Damage','Area'):
+        for x1,y1,x2,y2,text in lines:
+            if name.lower() not in text.lower():continue
+            crop=image.crop((max(0,x2-4),max(0,y1-6),min(image.width,x2+120),min(image.height,y2+6)))
+            crop=crop.resize((crop.width*4,crop.height*4),Image.LANCZOS)
+            crop_path=shot_path(name.lower()+'-value');crop.save(crop_path)
+            values=[text2 for *_,text2 in ocr_lines(crop_path)]
+            for text2 in values:
+                m=re.search(r'\+?(\d+(?:\.\d+)?)\s*%',text2)
+                if m:found[name]=float(m.group(1));break
+            if name in found:break
+    return found
+
+def find_stat_offsets(memory,base,percent,span=(0,256)):
+    """Read-only: float field offsets whose raw value equals the sheet's multiplier (1 + percent/100)."""
+    import struct as _s
+    expected=1+percent/100;raw=memory.read_bytes(base+span[0],span[1]-span[0])
+    hits=[]
+    for off in range(0,len(raw)-3,4):
+        value=_s.unpack_from('<f',raw,off)[0]
+        if abs(value-expected)<=max(0.005,expected*0.002):hits.append(span[0]+off)
+    return hits
+
 def window_name_candidates(pid):
     """Names shown top-left in the player frame, nearest the top first (single-word OCR lines only)."""
     import re
@@ -2965,14 +3084,12 @@ class WatcherWindow:
         self.toggle_button=ttk.Button(card,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='right')
         shown=ttk.LabelFrame(root,text='Stats on this build');shown.pack(fill='x',padx=12,pady=(0,8))
         self.stats_box=ttk.Frame(shown,padding=(8,4));self.stats_box.pack(fill='x')
-        box=ttk.LabelFrame(root,text='Talents');box.pack(fill='x',padx=12,pady=(0,8))
-        self.build_talents(box)
         foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(0,10))
+        ttk.Button(foot,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
         ttk.Button(foot,text='Launch Game',command=self.launch_game).pack(side='left',padx=(0,6))
         ttk.Button(foot,text='Settings',command=self.open_settings).pack(side='left')
-        self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left',padx=10)
+        self.foot=tk.StringVar()
         ttk.Label(foot,text='Solo or host only',foreground='#b26a00').pack(side='right')
-        ttk.Label(foot,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right',padx=10)
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
         notice=read().get('update_notice')
@@ -2981,11 +3098,18 @@ class WatcherWindow:
         self.refresh()
         if not configured():root.after(400,self.locate_game)  # first run: the window is up, now ask where the game is
         elif not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
+    def open_talents(self):
+        tk=self.tk;ttk=self.ttk
+        if getattr(self,'talents_window',None) and self.talents_window.winfo_exists():self.talents_window.lift();return
+        win=self.talents_window=tk.Toplevel(self.root);win.title('Talents');win.transient(self.root)
+        body=ttk.Frame(win,padding=12);body.pack(fill='both',expand=True)
+        self.build_talents(body)
+        win.protocol('WM_DELETE_WINDOW',lambda:(win.destroy(),setattr(self,'talents_window',None)))
     def build_talents(self,body):
         tk=self.tk;ttk=self.ttk
         first=ttk.Frame(body);first.pack(fill='x',pady=(0,6))
         self.cap_check=ttk.Checkbutton(first,text=f'Raise talent cap to {self.talent_cap.get()}',variable=self.talent_auto,command=self.talent_toggle);self.cap_check.pack(side='left')
-        self.talent_status=tk.StringVar(value='');ttk.Label(first,textvariable=self.talent_status,foreground='#2e7d32').pack(side='right')
+        self.talent_status=tk.StringVar(value='')
         second=ttk.Frame(body);second.pack(fill='x',pady=(0,4))
         ttk.Label(second,text='Max talents for').pack(side='left')
         names=['All classes']+[CLASS_NAMES[c] for c in CLASS_ORDER]
@@ -2994,8 +3118,7 @@ class WatcherWindow:
         self.class_choice.pack(side='left',padx=6)
         ttk.Button(second,text='Create save',command=self.max_talents_create).pack(side='left')
         ttk.Button(second,text='Open Saves folder',command=self.open_saves).pack(side='left',padx=6)
-        self.save_status=tk.StringVar(value='Then in the game: Options > Saves > Import Save.')
-        ttk.Label(body,textvariable=self.save_status,foreground='#555555',wraplength=470).pack(anchor='w',pady=(2,0))
+        self.save_status=tk.StringVar(value='')
     def open_settings(self):
         tk=self.tk;ttk=self.ttk
         if getattr(self,'settings_window',None) and self.settings_window.winfo_exists():self.settings_window.lift();return
@@ -3041,7 +3164,6 @@ class WatcherWindow:
             self.ttk.Label(row,text=name,width=14).pack(side='left')
             var=self.tk.StringVar(value='');self.applied_vars[name]=var
             self.ttk.Label(row,textvariable=var,foreground='#2e7d32').pack(side='right')
-        self.ttk.Label(self.stats_box,text='Other stats are applied only on builds where they have been verified.' if names else 'Nothing is held right now. Start a run to apply your stats.',foreground='#6b6b6b',wraplength=430).pack(anchor='w',pady=(6,0))
     def build_rows(self):
         ttk=self.ttk;data=read();disabled=set(data.get('gui_disabled',[]))
         for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
@@ -3208,7 +3330,7 @@ class WatcherWindow:
             targets={n:v for n,_,_,v in data['config']['targets']}
             for name,var in self.applied_vars.items():
                 pct=f"+{round((targets.get(name,1)-1)*100):,}%" if name in targets else ''
-                var.set(f"{pct}  ·  {'holding' if alive and state=='applying' else 'waiting' if alive else 'stopped'}")
+                var.set(pct)
             for name,(check,entry,offset) in self.row_widgets.items():
                 on=applied is None or name in applied
                 check.configure(state='normal' if on else 'disabled');entry.configure(state='normal' if on and offset!=20 else 'disabled')
@@ -3216,8 +3338,7 @@ class WatcherWindow:
                 v=values.get(name)
                 if applied is not None and name not in applied:var.set('Not verified')
                 else:var.set('-' if v is None else (f'{v:,.0f}' if abs(v)>=100 else f'{v:.3g}'))
-            self.foot.set(f"Writes: {monitor.get('total_field_writes',0)}"+('' if alive else '  |  watcher not running'))
-        except Exception as error:self.foot.set(f'Waiting... ({error})')
+        except Exception:pass
         self.root.after(1000,self.refresh)
 
 def gui():
@@ -3349,7 +3470,7 @@ def self_test():
             for index in range(5):hp[0]-=1;clock[0]+=1;state=engine.step()
             self.assertNotEqual(state['state'],'blocked_ambiguous');self.assertEqual(engine.candidate['base'],backend.base)
         def test_disabled_core_reports_blocked_without_searching_or_writing(self):
-            backend,clock,engine=self.recovery_fixture();backend.core=True
+            backend,clock,engine=self.recovery_fixture();backend.core=True;backend.build='some-other-build'
             def forbidden(_):raise AssertionError('Disabled discovery must not scan candidates.')
             backend.seek=forbidden
             state=engine.step()
