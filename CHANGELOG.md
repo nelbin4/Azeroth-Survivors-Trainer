@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.9.10 (experimental)
+## 2.0.0 (experimental)
 
 - **Fix: the Damage and Area hook never started.** The hook's lock and its stop event shared one Windows name, so starting it failed with "The handle is invalid". The lock now has its own name.
 
