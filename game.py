@@ -467,7 +467,6 @@ class AutoBackend:
             try:
                 for d,snap in learn_deltas(self.memory,self.process,header,dict(self.base_recipe,targets=self.base_targets),self.name):results[(header,d)]=snap
             except Exception:pass
-        deltas={d for _,d in results}
         layouts={key[1] for key in results}
         if len(layouts)!=1:
             self.learn_samples=[];self.learn_headers=None
@@ -531,7 +530,6 @@ class AutoBackend:
         if now<self.scene_next or self.scene_busy or self.process is None:return
         self.scene_next=now+10;self.scene_busy=True;pid=self.process.pid
         def job():
-            import tempfile
             try:
                 handle=game_window(pid)
                 if handle:
@@ -857,7 +855,7 @@ def auto_command():
         data=read();backend=None
         runtime=dict(pid=os.getpid(),created=psutil.Process().create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only,pauses=False)
         update_session(lambda current:current.update(auto_monitor=runtime))
-        deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;last_identity=None;talents_done=[None]
+        deadline=time.monotonic()+args.seconds;last_save=0;last_state=None;last_saved=None;talents_done=[None]
         try:
             backend=AutoBackend(data,signal)
             if args.trace_only:
@@ -1230,7 +1228,6 @@ def learn(args):
         except MemoryError as error:
             print(str(error))
     saved = data.setdefault('pointer_paths', [])
-    evidence = [p.pid, p.create_time(), c['base'], c['player_id'], c['pointer']]
     for path in paths:
         # Module-relative recipes survive ASLR; absolute roots are not identities.
         key = (path.get('module'), path.get('module_offset'), str(path.get('offsets')))
@@ -1878,7 +1875,6 @@ def name_headers(raw,length):
 
 def discover_name():
     """Find validated native records through their length-checked character name."""
-    import numpy as np
     from PyMemoryEditor import OpenProcess
     parser=argparse.ArgumentParser(description='Read-only native character-name discovery for the known build.')
     parser.add_argument('--name',default=None,help='Character name; defaults to the configured one')
@@ -2168,7 +2164,6 @@ def new_game():
         finally:sys.argv=original_argv
         return
     def inspect():
-        nonlocal original_argv
         method='fresh_name_validation'
         try:
             with redirect_stdout(io.StringIO()):resolve_name()
@@ -2433,7 +2428,6 @@ def fuzzy_in(text,name):
 
 def window_player_name(pid,names):
     """Which of several names is yours? The player frame (top-left of the screen) lists you first."""
-    import tempfile
     handle=game_window(pid)
     if not handle:return None
     path=shot_path('name')
@@ -3136,7 +3130,8 @@ class WatcherWindow:
         def target():
             try:
                 with redirect_stdout(io.StringIO()):work()
-            except Exception as error:self.root.after(0,lambda:self.say(f'Not applied: {error}'))
+            except Exception as error:
+                message=str(error);self.root.after(0,lambda:self.say(f'Not applied: {message}'))
             finally:self.busy=False
         threading.Thread(target=target,daemon=True).start()
     def start(self):
