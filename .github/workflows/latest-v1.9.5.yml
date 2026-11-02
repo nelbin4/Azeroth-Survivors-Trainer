@@ -1,0 +1,19 @@
+name: Mark v1.9.5 as latest
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/latest-v1.9.5.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  mark-latest:
+    if: github.event.head_commit.message == 'Mark v1.9.5 latest'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Promote v1.9.5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit v1.9.5 --repo "${{ github.repository }}" --prerelease=false --latest
