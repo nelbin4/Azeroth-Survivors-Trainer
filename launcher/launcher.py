@@ -1,9 +1,4 @@
-"""Azeroth Survivors Trainer launcher.
-
-A deliberately tiny program: it bundles Python and the libraries, then runs game.py from the folder it
-lives in. game.py stays a normal editable, auto-updating file, so updating the trainer never needs a
-new exe (only a new dependency does).
-"""
+"""Launch the bundled trainer source in a standalone executable."""
 import runpy
 import sys
 from pathlib import Path
@@ -12,7 +7,7 @@ from pathlib import Path
 import argparse, atexit, ctypes, ctypes.wintypes, difflib, hashlib, io, json, math, re, shutil, struct  # noqa: E401,F401
 import subprocess, tempfile, threading, time, unittest, urllib.request, uuid, zipfile  # noqa: E401,F401
 import tkinter, tkinter.filedialog, tkinter.messagebox, tkinter.simpledialog, tkinter.ttk  # noqa: E401,F401
-import numpy, psutil, PIL.Image, PIL.ImageOps, PyMemoryEditor  # noqa: E401,F401
+import numpy, psutil, PIL.Image, PIL.ImageOps, PyMemoryEditor, frida  # noqa: E401,F401
 
 
 def folder():
@@ -29,9 +24,9 @@ def fail(message):
 
 
 def main():
-    game = folder() / 'game.py'
+    game = (Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else folder()) / 'game.py'
     if not game.is_file():
-        fail(f'game.py was not found next to this program:\n{game.parent}\n\nKeep AzerothSurvivorsTrainer.exe and game.py in the same folder.')
+        fail(f'The bundled game.py was not found:\n{game}')
     arguments = sys.argv[1:]
     if arguments and arguments[0].lower().endswith('game.py'):  # game.py re-launches itself as: <exe> game.py <command>
         arguments = arguments[1:]

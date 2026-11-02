@@ -20,11 +20,12 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.3'
+VERSION = '1.9.4'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
+RESOURCE_ROOT = Path(__file__).resolve().parent
 SESSION = ROOT / 'session.json'
 CHECKED_BUILDS = set()
 AUTO_CORE_OFFSETS = frozenset((0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,112,120))
@@ -280,27 +281,58 @@ def core_scan(memory,cancelled=lambda:False,budget=40.,first=(),workers=4):
     return found
 
 def core_live(memory,bases,seconds=4.5):
-    """Which of these copies is the live one? Nudge Damage by 1%; the game recalculates the live record within seconds, copies stay."""
-    marks={}
-    for base in bases:
-        try:
-            before=memory.read_bytes(base+4,4);value=struct.unpack('<f',before)[0]
-            marker=struct.pack('<f',value*1.01+.01);memory.write_bytes(base+4,marker);marks[base]=(before,marker)
-        except Exception:pass
-    live=set();end=time.monotonic()+seconds
-    while time.monotonic()<end and len(live)<len(marks):
-        time.sleep(.15)
-        for base,(before,marker) in marks.items():
-            if base in live:continue
-            try:
-                if memory.read_bytes(base+4,4)!=marker:live.add(base)
-            except Exception:pass
-    for base,(before,marker) in marks.items():
-        if base not in live:
-            try:
-                if memory.read_bytes(base+4,4)==marker:memory.write_bytes(base+4,before)
-            except Exception:pass
-    return sorted(live)
+    """Fail closed: a matching pattern alone cannot identify the local player.
+
+    The previous probe wrote to every candidate, including during trace-only
+    operation. A read-only, identity-verified replacement is still needed.
+    """
+    return []
+
+def hook_current():
+    """Opt-in hook for a manually identified record on one verified build."""
+    import frida
+    parser=argparse.ArgumentParser(description='Experimental: keep Damage and Area at +9999% for a manually identified character record.')
+    parser.add_argument('--pid',required=True,type=int)
+    parser.add_argument('--base',required=True,type=lambda x:int(x,0))
+    parser.add_argument('--name',required=True)
+    args=parser.parse_args(sys.argv[2:])
+    if not args.name or len(args.name.encode('utf-8'))>24 or args.base<0x10000:
+        raise ValueError('Invalid name or stat address.')
+    proc=psutil.Process(args.pid)
+    exe=Path(proc.exe())
+    if exe.name.lower()!='azerothsurvivors.exe':raise ValueError('Not the game executable.')
+    digest=hashlib.sha256(exe.read_bytes()).hexdigest()
+    if digest!='0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274':
+        raise ValueError('Unsupported game build; no hooks installed.')
+    source=r'''const p=ptr(BASE), module=Process.getModuleByName('Azerothsurvivors.exe');
+const name=NAME, header=p.sub(912);
+function valid(){try {let cap=header.readU64().toNumber(), len=header.add(16).readU64().toNumber();
+ return len>0 && len<=24 && cap>=len && cap<=256 && header.add(8).readPointer().readUtf8String(len)===name;
+} catch (_) {return false;}}
+function check(off,hex){let x=Array.from(new Uint8Array(module.base.add(off).readByteArray(hex.length/2))).map(b=>b.toString(16).padStart(2,'0')).join('');if(x!==hex)throw Error('Instruction mismatch; no hooks installed.');}
+if(!valid())throw Error('Character record does not match the provided name.');
+check(0x5eca29b,'f30f11b6c8050000');check(0x5eca2ac,'f3440f118ed0050000');
+check(0x5eca34c,'f30f1186f4050000');check(0x5eca354,'0f2845f0f30f1186f8050000');
+let hooks=[];try {
+ hooks.push(Interceptor.attach(module.base.add(0x5eca2ac),{onEnter(){if(this.context.rsi.add(0x5c8).equals(p)&&valid())p.add(4).writeFloat(100.99);}}));
+ hooks.push(Interceptor.attach(module.base.add(0x5eca354),{onEnter(){if(this.context.rsi.add(0x5c8).equals(p)&&valid())p.add(44).writeFloat(100.99);}}));
+ if(!valid())throw Error('Character record changed.');p.add(4).writeFloat(100.99);p.add(44).writeFloat(100.99);
+ send('Damage and Area hooks active.');
+} catch(e){hooks.forEach(h=>h.detach());throw e;}'''.replace('BASE',json.dumps(hex(args.base))).replace('NAME',json.dumps(args.name))
+    session=frida.attach(args.pid)
+    try:
+        ready=threading.Event();errors=[]
+        script=session.create_script(source)
+        def receive(message,data):
+            if message['type']=='error':errors.append(message.get('description','Hook failed.'))
+            elif message['type']=='send':print(message['payload'],flush=True)
+            ready.set()
+        script.on('message',receive);script.load()
+        if not ready.wait(5) or errors:raise RuntimeError(errors[0] if errors else 'Hook did not start.')
+        print('Press Ctrl+C to detach. Addresses must be rediscovered for a new run.',flush=True)
+        while proc.is_running():time.sleep(1)
+    except KeyboardInterrupt:pass
+    finally:session.detach()
 
 class AutoBackend:
     """Live access adapter. Discovery is incremental, cancellable and read-only."""
@@ -2462,6 +2494,7 @@ def update_from_git():
 
 def auto_update():
     """At startup: fetch the latest release from GitHub. True means files were replaced and the caller should restart."""
+    if getattr(sys,'frozen',False):return False  # a bundled executable cannot update itself via source files
     if os.environ.get('AZEROTH_UPDATED'):return False
     try:
         if SESSION.exists() and not read().get('auto_update',True):return False
@@ -2788,7 +2821,7 @@ def configure(game_exe,name):
     if len(name.encode('utf-8'))>64:raise ValueError('Character name must be at most 64 bytes.')
     if SESSION.exists():data=read()
     else:
-        example=ROOT/'profile.example.json'
+        example=RESOURCE_ROOT/'profile.example.json'
         if not example.exists():raise RuntimeError('profile.example.json is missing; re-download the project.')
         data=json.loads(example.read_text(encoding='utf-8'))
     data['game_exe']=str(exe);data.setdefault('native_identity_recipe',{})['name']=name
@@ -2796,7 +2829,7 @@ def configure(game_exe,name):
 
 def seed_session():
     """Create session.json from the example profile with no game path yet (the window asks for it)."""
-    example=ROOT/'profile.example.json'
+    example=RESOURCE_ROOT/'profile.example.json'
     if not example.exists():raise RuntimeError('profile.example.json is missing; re-download the project.')
     data=json.loads(example.read_text(encoding='utf-8'));data.pop('game_exe',None);data.setdefault('native_identity_recipe',{})['name']='<auto>';save(data)
 
@@ -3238,6 +3271,11 @@ def self_test():
             self.assertEqual(found,[(H+700,700)])
             self.assertEqual(core_live(Memory(),[H+700],.3),[])  # nothing recalculates it here, so it counts as a stale copy
             self.assertEqual(struct.unpack('<f',bytes(mem[H+704-BASE:H+708-BASE]))[0],2.5)  # and is restored
+        def test_core_live_never_probes_candidates_by_writing(self):
+            class Memory:
+                def write_bytes(self,*args):raise AssertionError('Discovery must not write')
+                def read_bytes(self,*args):raise AssertionError('Unverified candidates must not be probed')
+            self.assertEqual(core_live(Memory(),[0x123000],0),[])
         def test_stats_only_layout_is_found_without_a_name(self):
             BASE=0x100000;H=0x100200;mem=bytearray(0x20000)
             def put(address,data):mem[address-BASE:address-BASE+len(data)]=data
@@ -3708,10 +3746,11 @@ if __name__ == '__main__':
     try:
         if command=='gui' or (command=='auto' and '--background' in sys.argv):
             if auto_update():restart_after_update()
-        if command not in ('setup','self-test','version','--version','--help','-h','help','gui'):ensure_configured()
+        if command not in ('setup','self-test','version','--version','--help','-h','help','gui','hook-current'):ensure_configured()
         if command in ('start','_worker','named-core','_named_core','source-apply','lifesteal-test','apply-once','apply-host','capture','numeric-watch','text-watch','inspect-copy','observe-swaps','discover') and auto_alive(read()):
             raise RuntimeError('Automatic watcher is active. Stop it before running a competing writer or debugger.')
-        if command == 'status': status()
+        if command == 'hook-current': hook_current()
+        elif command == 'status': status()
         elif command in ('--help','-h','help'):
             print('setup --game PATH --name NAME (first time) | Preferred: (no arguments) = window | --background = silent watcher | auto | new-game [--apply] | status | stop')
             print('Manual: resolve-name | discover-name --name <character> | named-core --seconds 600 --background')

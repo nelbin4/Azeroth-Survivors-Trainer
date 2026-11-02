@@ -1,23 +1,27 @@
 # Azeroth Survivors Trainer
 
-**Max out your character in Azeroth Survivors.** Open a small window, start your run, and your health, damage, crit, speed, experience, gold and more jump to the values you want, and stay there.
+> **1.9.4 experimental:** Automatic pattern-based live-record selection is disabled because it wrote to unverified candidates, including in observe-only mode. Automatic application may therefore wait indefinitely on some builds. The new Damage/Area hook requires a manually verified address and the exact supported game build; it does not automatically rediscover characters. Do not use the hook with another trainer or hook at the same instructions.
+
+> The Windows executable is standalone and includes `game.py` and Frida. Its source-file updater is disabled: install a newer executable for updates. The Python-source installation retains its existing updater.
+
+An experimental Windows trainer for Azeroth Survivors. Support varies by game build and character layout; automatic discovery can remain blocked when a record cannot be verified.
 
 > **For solo runs and games you host only.** Don't use it when you join someone else's game: it can't change anything there, and it can cause problems for the other players.
 
 ## What you get
 
-- **Huge stats, automatically.** Max health, damage, crit, speed, experience, gold, pickup range, area and more, kept at your targets all run long, even after you level up.
-- **Nothing to configure.** It finds your character by itself, even if you rename it in the lobby.
+- **Configurable stats.** The existing watcher supports multiple fields on layouts it can identify; it does not reliably identify every build or run.
+- **Experimental recalculation hook.** On the verified build, a manually located character record can keep Damage and Area at +9999% after recalculation.
 - **Doesn't pause the game.** It works quietly in the background while you play.
 - **Optional talent cap and max talents.** Raise your talent point cap (51 in the game) to 150, then max every talent for one class or all nine.
 - **Easy to switch off.** Untick any stat, switch to *Observe only*, or press *Stop* at any time.
-- **Updates itself** from GitHub when you open it.
+- **Updates:** source installations can update from GitHub; replace the standalone executable to update it.
 
 ## Get started in 3 steps
 
 1. **Download** the latest zip from the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases) and unzip it anywhere. You don't need to install anything else. *(Prefer Python? See "Install in detail" below.)*
 2. **Open Azeroth Survivors** (the Windows version) and start a **solo run**, or host one.
-3. **Double-click `AzerothSurvivorsTrainer.exe`.** The window opens right away; the first time, it asks you to pick the downloaded `AzerothSurvivors.exe`. That's it, there is no name to type. The window shows what it's doing, and your stats are applied once the run is going.
+3. **Double-click `AzerothSurvivorsTrainer.exe`.** The first time, select the game executable. The window shows whether it could identify the character; some builds remain unsupported.
 
 If the game runs as administrator, run the trainer as administrator too.
 
@@ -41,7 +45,7 @@ Everything below is for people who want to know more or to use the command line.
 
 ### Option A: the Windows program (no Python needed)
 
-Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep it in the same folder as `game.py`: the exe is only a small launcher that bundles Python and loads `game.py` from that folder, so the trainer's updates never need a new exe. The first start takes a few seconds while the bundled libraries unpack. The newest release is always on the [Releases page](https://github.com/nelbin4/Azeroth-Survivors-Trainer/releases). Command-line commands such as `status` and `stop` print nothing from this windowed exe; use Option B or the window for those.
+Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. The executable includes the trainer code and dependencies. The first start takes a few seconds while the bundled libraries unpack. Install a new executable to update it. Command-line commands print nothing from this windowed exe; use Python or a console build for those.
 
 > Windows SmartScreen or your antivirus may warn about an unsigned program that reads another program's memory. That is expected for any trainer; the source of everything is in this repository.
 
@@ -58,7 +62,7 @@ python game.py
 
 ## First run in detail
 
-The window opens first and asks once for the path to `AzerothSurvivors.exe` (if you cancel, press **Locate game** later). It never asks for a character name: the trainer detects your character itself, so switching characters needs no setup. You can rename your character in the lobby whenever you like; the name is re-detected for every run. Then start a run; the watcher starts with the window and applies your stats once you level up or take damage.
+The window asks for the path to `AzerothSurvivors.exe`. Start a run and watch its status: the watcher may not find a sufficiently verified character record, especially after a game update. The experimental command-line hook requires a manually located record and character name.
 
 Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`. Your settings are stored in `session.json` next to the program and are never uploaded.
 
@@ -70,14 +74,20 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 ## What it does
 
 - **Automatic character detection.** Finds your character in memory by structure, not by a fixed name. In a solo run it is the only character; when hosting with others it picks the one listed first in your player frame (read from a background capture). Names it has seen are remembered.
-- **Stat trainer.** Keeps these at your targets: max and current HP, damage, haste, crit, crit damage, speed, pickup range, experience, armor, regeneration, area, luck, gold bonus, extra targets, echo, kill heal, buff power, DoT stacks, DoT haste and the gold wallet. It checks level, name and ownership before every write, verifies by readback, and re-applies after level-ups. The shipped targets are 9999-style maximums, except speed (+50%) and experience (+200%), which you can raise in `session.json`. See Limitations for what is not covered.
-- **No debugger, no injection.** It uses ordinary read/write process memory access only. Your stats are written without ever pausing the game. The optional talent cap is the one exception: it changes one number in 20 places of the game's code (in memory only; closing the game undoes it) and pauses the game for a few milliseconds while it does.
-- **Self-learning for new game versions.** If the game updates, it re-learns where your character lives (read-only) and only writes fields it could verify. A `relayout` command re-learns moved stats from your character sheet.
+- **Stat trainer.** On supported, identified layouts, the watcher can apply configured stat targets. The separate experimental hook currently covers Damage and Area only; its address must be revalidated for each run. Readback and a matching name alone do not establish that a field controls gameplay.
+- **Runtime instrumentation.** The experimental hook uses Frida to intercept instructions in the game process. The optional talent cap also changes code in memory.
+- **Game updates.** Layout discovery is not reliable for every update. The experimental hook rejects all executable hashes other than the verified build.
 - **Menu / lobby awareness.** While no run is active the state says *in menu* or *in lobby* instead of just waiting.
 - **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
-- **Self-updating.** Checks GitHub at startup (see Updates).
+- **Source updates.** Python installations can check GitHub at startup (see Updates).
+
+### Experimental Damage and Area hook
+
+For the game executable with SHA-256 `0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274`, use `python game.py hook-current --pid PID --base 0xADDRESS --name CHARACTER` from a console. The base must be the manually verified live stat record for the current run. This command does not discover the address. It checks the executable hash, instruction bytes, and name header before attaching, and checks the name again on each write. Stop it with Ctrl+C. It does not automatically follow a new run or process; do not run it alongside other hooks at those instructions. The windowed executable does not show console output; use Python or a console build for this command.
 
 ## Updates
+
+The standalone executable does not update itself. The source-update behavior below applies only to Python installations.
 
 At startup (the window, or `--background`) the trainer checks GitHub for a newer version, downloads it, checks that the new code compiles, replaces the program files, and restarts itself. This takes a couple of seconds and is skipped silently when you are offline.
 
@@ -146,12 +156,12 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **State "blocked ambiguous"** — more than one character is in the game (a hosted lobby) and yours could not be told apart; keep the player frame visible on screen and it is picked from there.
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
-- **The exe does not start** — keep `game.py` in the same folder as the exe; the message box tells you if it is missing. Antivirus or SmartScreen may need an exception for an unsigned program.
+- **The exe does not start** — reinstall the release archive. Antivirus or SmartScreen may warn about an unsigned program.
 - Errors from the window are written to `gui-error.log`.
 
 ## Development
 
-`launcher/launcher.py` is the whole exe: it imports the libraries `game.py` needs (so PyInstaller bundles them) and runs `game.py` from its own folder. Build it with:
+`launcher/launcher.py` loads the bundled `game.py`; PyInstaller packages it, the default profile, and the dependencies into the executable. Build it with:
 
 ```bash
 pip install pyinstaller
@@ -160,7 +170,7 @@ python build_exe.py --console  # console build, handy for testing commands
 ```
 
 ```bash
-python game.py self-test    # 57 tests, no game required
+python game.py self-test    # no game required
 ```
 
 CI runs the tests on Windows for every push. Technical research notes (memory layout, history of approaches) are in [docs/TECHNICAL_NOTES.md](docs/TECHNICAL_NOTES.md). See [CHANGELOG.md](CHANGELOG.md) for release notes.

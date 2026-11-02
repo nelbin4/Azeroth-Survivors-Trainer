@@ -1,5 +1,11 @@
 # Changelog
 
+# 1.9.4 (experimental)
+
+- Disable the unsafe candidate-write probe used by automatic pattern discovery. This may leave some runs without an automatic match.
+- Add an explicit, build-checked Damage and Area recalculation hook for a manually verified record. New runs require rediscovery.
+- Bundle the trainer and Frida into the Windows executable. Source-based automatic updates are disabled in frozen builds.
+
 ## 1.9.3 — 2026-11-02
 
 - **Area is applied** on game build `eb7447…`, next to Damage (both pinned every 20 ms). Tested stepwise first: 2, 4, 10, 30 and 100.99, five seconds each, then 15 seconds at 100.99 in a live party run (level 71 to 72), game responsive throughout. Extra targets are still off.
