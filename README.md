@@ -6,7 +6,7 @@
 
 An experimental Windows trainer for Azeroth Survivors. Support varies by game build and character layout; automatic discovery can remain blocked when a record cannot be verified.
 
-> **For solo runs and games you host only.** Don't use it when you join someone else's game: it can't change anything there, and it can cause problems for the other players.
+> **Solo and hosted games:** the available tests were performed in solo or hosted runs. Joined co-op behavior has not been reliably verified.
 
 ## What you get
 
@@ -27,7 +27,7 @@ If the game runs as administrator, run the trainer as administrator too.
 
 ## Quick answers
 
-- **Can I use it online?** Only in games *you host*, or solo. Never when joining someone else's game.
+- **Can I use it in a joined co-op game?** The trainer's effects there have not been reliably verified; avoid using it in games where other players have not agreed.
 - **Will it break my game?** It's careful (it checks before every change and keeps backups), but changing a game's memory is never risk-free. Use it at your own risk, and don't push stats to extremes you can't undo (for example, very high experience means many level-ups per second).
 - **My antivirus warns about it.** That's common for any trainer that edits another program's memory, because the program is unsigned. The full source is in this repository.
 - **Does it work with the browser version of the game?** No, only the Windows version.
@@ -66,20 +66,20 @@ The window asks for the path to `AzerothSurvivors.exe`. Start a run and watch it
 
 Command-line setup instead of the prompts: `python game.py setup --game "C:\path\to\AzerothSurvivors.exe"`. Your settings are stored in `session.json` next to the program and are never uploaded.
 
-> ### Solo or host only — do not use it when joining a game
-> Use this trainer **only in a solo run, or in a game you are hosting**. Do **not** use it when you join someone else's game. As a guest, your stats are computed by the host and your PC only shows copies, so changes do nothing there, and tampering with a joined game can desync or disconnect you and disrupt the other players.
+> ### Co-op
+> The current trainer has been tested in solo and hosted games. Whether a change in a joined co-op game affects gameplay is unverified; memory values and displays alone do not establish which participant controls combat state.
 >
 > Changing memory in a game can also crash it or corrupt a run, so use it at your own risk. Do not use it to disrupt other players.
 
 ## What it does
 
-- **Automatic character detection.** Finds your character in memory by structure, not by a fixed name. In a solo run it is the only character; when hosting with others it picks the one listed first in your player frame (read from a background capture). Names it has seen are remembered.
+- **Character detection.** The watcher attempts to identify a character from memory and screen information. It can fail or encounter ambiguous candidates; automatic discovery across new runs is unfinished.
 - **Stat trainer.** On supported, identified layouts, the watcher can apply configured stat targets. The separate experimental hook currently covers Damage and Area only; its address must be revalidated for each run. Readback and a matching name alone do not establish that a field controls gameplay.
 - **Runtime instrumentation.** The experimental hook uses Frida to intercept instructions in the game process. The optional talent cap also changes code in memory.
 - **Game updates.** Layout discovery is not reliable for every update. The experimental hook rejects all executable hashes other than the verified build.
 - **Menu / lobby awareness.** While no run is active the state says *in menu* or *in lobby* instead of just waiting.
 - **Safe by default.** Every field can be switched off, and an observe-only mode never writes.
-- **Source updates.** Python installations can check GitHub at startup (see Updates).
+- **Source updates.** Both launcher and Python installations can check GitHub at startup (see Updates).
 
 ### Experimental Damage and Area hook
 
@@ -87,14 +87,21 @@ For the game executable with SHA-256 `0e8e314df4d78ab211b1bef5c48d78d713ed642608
 
 ## Updates
 
-The launcher downloads only `game.py` when a newer version is available. It compiles the downloaded source before replacing the file and backs up the previous version under `.update_backup/`. Profiles, settings and saves are not replaced. Updates come from this repository's `main` branch and can be disabled in Settings. Source checkouts still use a clean Git fast-forward.
+The launcher checks `game.py` on this repository's `main` branch. When it finds a higher `VERSION`, it downloads that file, checks that the source compiles, backs up the previous file under `.update_backup/`, replaces it and restarts. Compilation checks syntax, not whether the update works with every game build or bundled dependency. Your settings and saves are not replaced.
 
-At startup (the window, or `--background`) the trainer checks GitHub for a newer version and restarts after a successful source update. It skips the check when offline.
+The check runs when the trainer window starts, or when `auto --background` is launched. **Starting a new game run while the trainer is already running does not trigger an update check.** Stop the existing watcher and restart the trainer to check again. Direct commands such as `hook-current` do not check for updates. Offline checks are skipped silently.
 
 - **What is replaced:** only `game.py`. Your `session.json`, profile, and saves are not changed by the updater. The previous `game.py` is backed up in `.update_backup/<old version>/`.
-- **Git checkouts** (developers) only fast-forward when you have no uncommitted changes.
+- **Git checkouts** (developers) fetch and fast-forward the checkout only when tracked files have no uncommitted changes; this can update files other than `game.py`.
 - **Trust:** updates come over HTTPS from this repository's `main` branch. Switch it off with the window's *Check GitHub for updates* box, or `"auto_update": false` in `session.json`, or start with `--no-update`.
-- If an update adds a dependency or requires a newer Python runtime, install a newer launcher executable. Python installations may need `pip install -r requirements.txt`.
+- README and other documentation updates on GitHub are **not** downloaded by the launcher's source updater. Download a new release if you want its bundled documentation.
+- If an update adds a dependency or requires a newer Python runtime or default profile, install a newer launcher executable. Python installations may need `pip install -r requirements.txt`.
+
+### Publishing a source-only update
+
+1. Change and test `game.py`; increment its `VERSION` to a numerically higher version (for example, `1.9.5` to `1.9.6`).
+2. Commit and push it to `main`. Existing launcher installations with update checks enabled can then receive the source file the next time the trainer starts. The check reads `main`, not the GitHub Releases page.
+3. Publish a new launcher package if the change needs different bundled dependencies, Python, or default profile. Publish a new GitHub Release when you want the Releases page and new downloads to include the update; pushing source alone does not update an existing release ZIP.
 
 ## Using it
 
@@ -129,22 +136,18 @@ The trainer never records your screen. Only while **no run is active** it reads 
 
 ## How it stays safe
 
-1. Finds the game by exact executable path and checks its SHA-256. An unknown build triggers read-only learning, never blind writes.
-2. Identifies your character by structure (no name needed), then validates player ID, level, plausible stats and the modifier table.
-3. Backs up original bytes before the first write, checks ownership before each write, and verifies by readback. On failure it conditionally restores only bytes it wrote.
-4. A single odd reading never resets state; a level drop must be seen twice before the run is treated as new, and writes pause meanwhile.
-5. If the character is ambiguous (several valid copies), it picks the one that actually changes, or refuses to write.
+The watcher includes structural checks and can refuse ambiguous candidates, but those checks do not guarantee that a record belongs to the local player or controls gameplay. The old pattern-based candidate-writing probe is disabled. The experimental hook checks its exact game hash, instructions and name header; it still requires the user to supply a verified record for the current run.
 
 ## Limitations
 
-- **Solo or host only — never when joining a game.** As a guest, your PC holds display copies refreshed from the host every tick; writes there have no effect and can cause problems for other players.
+- **Joined co-op:** effects on live gameplay are unverified, including which participant controls a given stat.
 - **Windows build only.** The browser version is not supported.
 - A new game build's learned layout is only trusted after three consistent samples. If stat offsets themselves move, run `relayout`.
 - Target values live in `session.json` (`config.targets`); a displayed `+N%` is the multiplier `1 + N/100` (for example +200% experience = 3.0). Speed is locked at +50%; experience may be set from 1 to 1,000,000. Extreme values can make the game misbehave (for example many level-ups per second).
 - **Max talents use a signed copy of your save.** The trainer finds the game's own save key inside the game file and accepts it only if it authenticates your current save; it refuses to write anything if the game's talent table does not match the talents already in your save. It never edits `characters.txt` itself.
 - **Talent cap:** it is applied to the running game only, so it is applied again every time the game starts while *Raise talent cap* is ticked. The small "51 at most" text on the talents screen is a fixed label and keeps saying 51; the points you can spend are what change. Reopen the Talents tab after applying so the screen redraws. Each game update can move the code the cap lives in; the trainer finds it again from the game file and refuses to touch the game if what it finds does not fit.
 - **Not covered:** lives, thorns, lifesteal and pet damage. Lives, thorns and lifesteal were not found as editable values at all in the character's data (they appear to exist only once you own something that grants them); pet damage is simply not applied. Vs elites and DoT stacks are covered, but the game resets them whenever the trainer is not running, so keep the watcher running.
-- **New or patched game builds:** the trainer finds your character by its stat pattern within seconds (no setup, no waiting for a level-up) and applies **Damage** and **Area** first. The other stats are added one at a time once each is proven safe (a first test that wrote many at once froze and then crashed the game).
+- **New runs or patched builds:** automatic discovery and reacquisition are not reliable. The experimental Damage/Area hook supports only the documented build and needs a newly verified address for each run.
 - Only the stats listed in the window are managed. The wallet needs its offset learned on new builds (`find-wallet`).
 - Values apply in periodic corrections (about every half second), not atomically, so the display can briefly dip after a recalculation.
 
@@ -152,7 +155,7 @@ The trainer never records your screen. Only while **no run is active** it reads 
 
 - **"Not configured yet"** — run the window once, or `setup`.
 - **State "in menu" / "in lobby"** — no run is active yet, and the trainer can tell which screen you are on (read from a background capture). Start a run and it takes over.
-- **State stays "seeking record"** — you are probably in a lobby or in someone else's game (not supported).
+- **State stays "seeking record"** — the watcher has not identified a usable character record. It can remain in this state during a run.
 - **State "blocked ambiguous"** — more than one character is in the game (a hosted lobby) and yours could not be told apart; keep the player frame visible on screen and it is picked from there.
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
