@@ -337,7 +337,7 @@ let hooks=[];try {
  if(!valid())throw Error('Character record changed.');p.add(4).writeFloat(100.99);p.add(44).writeFloat(100.99);
  send('Damage and Area hooks active.');
 } catch(e){hooks.forEach(h=>h.detach());throw e;}'''.replace('BASE',json.dumps(hex(args.base))).replace('NAME',json.dumps(args.name))
-    with mutex('hook',0),StopSignal('hook') as signal:
+    with mutex('hook-lock',0),StopSignal('hook') as signal:  # different kernel names: a mutex and an event can't share one
         signal.reset();session=frida.attach(args.pid)
         try:
             ready=threading.Event();errors=[]
@@ -3041,7 +3041,7 @@ class WatcherWindow:
             self.ttk.Label(row,text=name,width=14).pack(side='left')
             var=self.tk.StringVar(value='');self.applied_vars[name]=var
             self.ttk.Label(row,textvariable=var,foreground='#2e7d32').pack(side='right')
-        self.ttk.Label(self.stats_box,text='Other stats are applied only on builds where they have been verified.',foreground='#6b6b6b',wraplength=430).pack(anchor='w',pady=(6,0))
+        self.ttk.Label(self.stats_box,text='Other stats are applied only on builds where they have been verified.' if names else 'Nothing is held right now. Start a run to apply your stats.',foreground='#6b6b6b',wraplength=430).pack(anchor='w',pady=(6,0))
     def build_rows(self):
         ttk=self.ttk;data=read();disabled=set(data.get('gui_disabled',[]))
         for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
@@ -3104,7 +3104,7 @@ class WatcherWindow:
         try:process,base,digest=talents_target(data)
         except Exception:return 'Start the game to use talents.'
         sites=data.get('learned_builds',{}).get(digest,{}).get('talent_sites')
-        if not sites:return 'Press Apply: the cap spots for this game version are found from the game file first.'
+        if not sites:return 'The cap spots for this game version are found from the game file when the trainer starts.'
         try:
             with ProcessCode(process.pid) as code:patched,total,cap=talent_state(code,base,sites)
         except Exception as error:return f'Talent spots could not be read ({error}).'
@@ -3203,7 +3203,7 @@ class WatcherWindow:
             try:values=self.live_values(monitor) if alive else {}
             except Exception:values={}
             applied=monitor.get('applied') if alive else None
-            shown=monitor.get('applied') or ['Damage']
+            shown=monitor.get('applied') or []
             self.refresh_applied(shown)
             targets={n:v for n,_,_,v in data['config']['targets']}
             for name,var in self.applied_vars.items():
