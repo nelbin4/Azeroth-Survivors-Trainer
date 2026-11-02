@@ -161,7 +161,7 @@ The watcher includes structural checks and can refuse ambiguous candidates, but 
 - **State "in menu" / "in lobby"** — no run is active yet, and the trainer can tell which screen you are on (read from a background capture). Start a run and it takes over.
 - **State stays "seeking record"** — the watcher has not identified a usable character record. It can remain in this state during a run.
 - **State "blocked ambiguous"** — more than one character is in the game (a hosted lobby) and yours could not be told apart; keep the player frame visible on screen and it is picked from there.
-- **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
+- **State "blocked"** — read the displayed reason. If automatic character discovery is unavailable for the current build, waiting or leveling up will not unblock it; that build needs a verified discovery method.
 - **Nothing happens** — run as administrator if the game is elevated.
 - **The exe does not start** — check that `game.py` is next to it, or reinstall the release archive. Antivirus or SmartScreen may warn about an unsigned program.
 - Diagnostic output and window errors are appended to `trainer.log` next to the executable.

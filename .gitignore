@@ -21,3 +21,6 @@ build/
 dist/
 release/
 *.spec
+
+# local Claude Code settings
+.claude/settings.local.json

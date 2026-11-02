@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.7'
+VERSION = '1.9.8'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -764,6 +764,9 @@ class AutoRecovery:
                 self.backend.bind(generation);self.generation=generation;self.forget()
             if getattr(self.backend,'learning',False):
                 self.state=self.backend.learn(now);return self.state
+            if getattr(self.backend,'core',False):
+                self.state=dict(state='blocked',reason='Automatic character discovery is unavailable for this game build; no stats were changed.')
+                return self.state
             if self.candidate is None:
                 candidates=self.backend.seek(now)
                 if not candidates and hasattr(self.backend,'refresh_scene'):self.backend.refresh_scene(now)
@@ -874,7 +877,7 @@ def auto_command():
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
                     runtime.update(state);runtime['reason']=state.get('reason');runtime['character']=backend.name;runtime.update(heartbeat=time.time(),game_pid=engine.generation[0] if engine.generation else None,
                         game_created=engine.generation[1] if engine.generation else None,scan_bytes=backend.scan_bytes,
-                        scan_errors=backend.scan_errors,missing_source_kinds=backend.missing_sources,applied=backend.applied_names())
+                        scan_errors=backend.scan_errors,missing_source_kinds=backend.missing_sources,applied=[] if state.get('state')=='blocked' else backend.applied_names())
                     def publish(current):
                         if current.get('stop_requested'):signal.request()
                         current['auto_monitor']=runtime;backend.disabled=set(current.get('gui_disabled',[]))
@@ -3186,7 +3189,7 @@ class WatcherWindow:
                 check.configure(state='normal' if on else 'disabled');entry.configure(state='normal' if on and offset!=20 else 'disabled')
             for name,var in self.live_vars.items():
                 v=values.get(name)
-                if applied is not None and name not in applied:var.set('not on this build')
+                if applied is not None and name not in applied:var.set('Not verified')
                 else:var.set('-' if v is None else (f'{v:,.0f}' if abs(v)>=100 else f'{v:.3g}'))
             self.foot.set(f"Writes: {monitor.get('total_field_writes',0)}"+('' if alive else '  |  watcher not running'))
         except Exception as error:self.foot.set(f'Waiting... ({error})')
@@ -3320,6 +3323,14 @@ def self_test():
             for _ in range(5):self.assertEqual(engine.step()['state'],'blocked_ambiguous')  # nothing moves: stay blocked
             for index in range(5):hp[0]-=1;clock[0]+=1;state=engine.step()
             self.assertNotEqual(state['state'],'blocked_ambiguous');self.assertEqual(engine.candidate['base'],backend.base)
+        def test_disabled_core_reports_blocked_without_searching_or_writing(self):
+            backend,clock,engine=self.recovery_fixture();backend.core=True
+            def forbidden(_):raise AssertionError('Disabled discovery must not scan candidates.')
+            backend.seek=forbidden
+            state=engine.step()
+            self.assertEqual(state['state'],'blocked')
+            self.assertIn('unavailable',state['reason'])
+            self.assertEqual(backend.writes,[])
         def test_failed_step_clears_duplicate_history(self):
             backend,clock,engine=self.recovery_fixture();backend.ambiguous=True
             for _ in range(3):engine.step()

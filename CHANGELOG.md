@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.8 (experimental)
+
+- Report unavailable automatic character discovery as blocked instead of indefinitely looking, and show unverified stats accurately. This does not add automatic discovery for the affected build.
+
 ## 1.9.7 (experimental)
 
 - Add a Launch Game button using the configured game executable. The button avoids launching a second copy when that exact executable is already running.
