@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.6'
+VERSION = '1.9.7'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -58,6 +58,23 @@ class StopSignal:
     def __exit__(self,*_):self.close()
 
 class AutoBlocked(RuntimeError):pass
+
+def launch_game(executable):
+    """Start the configured game once, with its install folder as the working directory."""
+    path=Path(executable).expanduser().resolve()
+    if path.name.lower()!='azerothsurvivors.exe' or not path.is_file():
+        raise ValueError('Select a valid AzerothSurvivors.exe first.')
+    target=os.path.normcase(str(path))
+    for process in psutil.process_iter(['exe']):
+        try:
+            existing=process.info.get('exe')
+            if existing and os.path.normcase(str(Path(existing).resolve()))==target:
+                return False
+        except (psutil.Error,OSError):
+            continue
+    subprocess.Popen([str(path)],cwd=str(path.parent),stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    return True
 
 def actor_snapshot(memory,process,base,recipe,name,expected_id=None,health_ceiling=None):
     """One contiguous actor snapshot plus name/vector and identity rechecks."""
@@ -2953,6 +2970,7 @@ class WatcherWindow:
         tabs.add(stats,text='Stats');tabs.add(talents,text='Talents');tabs.add(logs,text='Log')
         self.build_stats(stats);self.build_talents(talents);self.build_log(logs)
         foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(0,10))
+        ttk.Button(foot,text='Launch Game',command=self.launch_game).pack(side='left',padx=(0,6))
         ttk.Button(foot,text='Settings',command=self.open_settings).pack(side='left')
         self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left',padx=10)
         ttk.Label(foot,text='Solo or host only',foreground='#b26a00').pack(side='right')
@@ -3033,10 +3051,20 @@ class WatcherWindow:
     def locate_game(self):
         from tkinter import filedialog
         path=filedialog.askopenfilename(parent=self.root,title='Select AzerothSurvivors.exe (the game you downloaded)',filetypes=[('Game executable','AzerothSurvivors.exe'),('Executable','*.exe')])
-        if not path:self.say('Game not located yet. Press Locate game when you are ready.');return
+        if not path:self.say('Game not located yet. Press Locate game when you are ready.');return False
         try:configure(path,None)
-        except Exception as error:self.say(f'Could not use that file: {error}');return
-        self.say(f'Game set to {path}.');self.start()
+        except Exception as error:self.say(f'Could not use that file: {error}');return False
+        self.say(f'Game set to {path}.');self.start();return True
+    def launch_game(self):
+        from tkinter import messagebox
+        if not configured() and not self.locate_game():return
+        try:
+            started=launch_game(read()['game_exe'])
+        except (OSError,ValueError,KeyError) as error:
+            self.say(f'Could not launch game: {error}')
+            messagebox.showerror('Could not launch game',str(error),parent=self.root)
+            return
+        self.say('Game launched.' if started else 'Game is already running.')
     def toggle_run(self):
         if not configured():self.locate_game()
         elif self.alive:self.stop()
@@ -3186,6 +3214,24 @@ def gui():
 def self_test():
     import unittest
     class Tests(unittest.TestCase):
+        def test_launch_game_uses_install_directory_and_avoids_duplicates(self):
+            import tempfile
+            from unittest.mock import patch
+            with tempfile.TemporaryDirectory(prefix='game path ') as folder:
+                exe=Path(folder)/'AzerothSurvivors.exe';exe.write_bytes(b'MZ')
+                with patch.object(psutil,'process_iter',return_value=[]), patch.object(subprocess,'Popen') as start:
+                    self.assertTrue(launch_game(exe))
+                    self.assertEqual(start.call_args.args[0],[str(exe.resolve())])
+                    self.assertEqual(start.call_args.kwargs['cwd'],str(exe.parent.resolve()))
+                class Running:
+                    info={'exe':str(exe)}
+                with patch.object(psutil,'process_iter',return_value=[Running()]), patch.object(subprocess,'Popen') as start:
+                    self.assertFalse(launch_game(exe));start.assert_not_called()
+        def test_launch_game_rejects_wrong_executable(self):
+            import tempfile
+            with tempfile.TemporaryDirectory() as folder:
+                wrong=Path(folder)/'other.exe';wrong.write_bytes(b'MZ')
+                with self.assertRaises(ValueError):launch_game(wrong)
         def test_hook_stop_signal_is_shared_between_handles(self):
             suffix='hook-test-'+uuid.uuid4().hex
             with StopSignal(suffix) as first, StopSignal(suffix) as second:

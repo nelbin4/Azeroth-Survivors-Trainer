@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.7 (experimental)
+
+- Add a Launch Game button using the configured game executable. The button avoids launching a second copy when that exact executable is already running.
+
 ## 1.9.6 (experimental)
 
 - Use one windowed launcher for the GUI and command-line operations; output and errors are appended to `trainer.log`.

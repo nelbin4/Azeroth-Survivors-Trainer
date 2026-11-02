@@ -23,6 +23,8 @@ An experimental Windows trainer for Azeroth Survivors. Support varies by game bu
 2. **Open Azeroth Survivors** (the Windows version) and start a **solo run**, or host one.
 3. **Double-click `AzerothSurvivorsTrainer.exe`.** The first time, select the game executable. The window shows whether it could identify the character; some builds remain unsupported.
 
+To open the configured game from the trainer, click **Launch Game**. If the game is already running, the trainer does not start a duplicate. If the game is not configured, it first asks you to select `AzerothSurvivors.exe`.
+
 If the game runs as administrator, run the trainer as administrator too.
 
 ## Quick answers
