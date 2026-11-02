@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.6 (experimental)
+
+- Use one windowed launcher for the GUI and command-line operations; output and errors are appended to `trainer.log`.
+- Add `hook-stop` and a bounded hook duration so the experimental hook can be stopped without a console.
+- Ship one launcher, `game.py`, and the license in the release ZIP.
+- Use the supplied artwork as the launcher and application-window icon.
+
 ## 1.9.5 (experimental)
 
 - Return to a reusable launcher that loads the adjacent `game.py` and bundles its default profile.

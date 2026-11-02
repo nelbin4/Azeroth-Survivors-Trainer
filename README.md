@@ -45,7 +45,7 @@ Everything below is for people who want to know more or to use the command line.
 
 ### Option A: the Windows program (no Python needed)
 
-Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep `game.py` in the same folder. The executable bundles Python, the dependencies and the default profile; the first start takes a few seconds while they unpack. Command-line commands print nothing from the windowed exe; use Python or the console executable for those.
+Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep `game.py` in the same folder. The executable bundles Python, the dependencies and the default profile; the first start takes a few seconds while they unpack. Command-line output and diagnostic errors are appended to `trainer.log` in that folder.
 
 > Windows SmartScreen or your antivirus may warn about an unsigned program that reads another program's memory. That is expected for any trainer; the source of everything is in this repository.
 
@@ -83,7 +83,7 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 
 ### Experimental Damage and Area hook
 
-For the game executable with SHA-256 `0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274`, use `python game.py hook-current --pid PID --base 0xADDRESS --name CHARACTER` from a console. The base must be the manually verified live stat record for the current run. This command does not discover the address. It checks the executable hash, instruction bytes, and name header before attaching, and checks the name again on each write. Stop it with Ctrl+C. It does not automatically follow a new run or process; do not run it alongside other hooks at those instructions. The windowed executable does not show console output; use Python or a console build for this command.
+For the game executable with SHA-256 `0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274`, run `.\AzerothSurvivorsTrainer.exe hook-current --pid PID --base 0xADDRESS --name CHARACTER` from PowerShell or Command Prompt. Check `trainer.log` for the result. The base must be the manually verified live stat record for the current run. This command does not discover the address. It checks the executable hash, instruction bytes, and name header before attaching, and checks the name again on each write. The hook runs for at most 600 seconds by default; set `--seconds` to a value from 1 to 86400 to change this, or run `.\AzerothSurvivorsTrainer.exe hook-stop` to detach it early. It does not automatically follow a new run or process; do not run it alongside other hooks at those instructions. Python users can use the same commands with `python game.py` instead of the executable.
 
 ## Updates
 
@@ -119,6 +119,8 @@ The check runs when the trainer window starts, or when `auto --background` is la
 | `python game.py --version` | Shows the version. |
 
 Add `--no-update` after any command (for example `python game.py gui --no-update`) to skip the startup update check.
+
+The same commands work with `AzerothSurvivorsTrainer.exe` instead of `python game.py`. The executable runs without a console window and appends output to `trainer.log`; it does not print results to the terminal. A hook command remains active until its timeout, the game closes, or `hook-stop` is called.
 
 The window is a status card (what the trainer is doing, your level, and a Start/Stop button) with three tabs. **Stats**: tick stats on or off, or type a new target and press Enter (the watcher restarts to use it); stats the current game build does not apply yet are greyed out. **Talents**: a *Raise talent cap* checkbox (applied now, and every time the game starts) and the *Max talents* class picker with **Create save** and *Open Saves folder*. **Log**: what the trainer is doing. **Settings** (bottom left) holds the Write / Observe-only switch, the cap number, the update check and *What's new*. Closing the window leaves the watcher running; press **Stop** to end it.
 
@@ -160,7 +162,7 @@ The watcher includes structural checks and can refuse ambiguous candidates, but 
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
 - **The exe does not start** — check that `game.py` is next to it, or reinstall the release archive. Antivirus or SmartScreen may warn about an unsigned program.
-- Errors from the window are written to `gui-error.log`.
+- Diagnostic output and window errors are appended to `trainer.log` next to the executable.
 
 ## Development
 
@@ -169,7 +171,6 @@ The watcher includes structural checks and can refuse ambiguous candidates, but 
 ```bash
 pip install pyinstaller
 python build_exe.py            # windowed exe + release zip in release/
-python build_exe.py --console  # console build, handy for testing commands
 ```
 
 ```bash

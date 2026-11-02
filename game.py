@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.5'
+VERSION = '1.9.6'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -295,8 +295,9 @@ def hook_current():
     parser.add_argument('--pid',required=True,type=int)
     parser.add_argument('--base',required=True,type=lambda x:int(x,0))
     parser.add_argument('--name',required=True)
+    parser.add_argument('--seconds',type=int,default=600,help='Maximum hook duration (default: 600 seconds).')
     args=parser.parse_args(sys.argv[2:])
-    if not args.name or len(args.name.encode('utf-8'))>24 or args.base<0x10000:
+    if not args.name or len(args.name.encode('utf-8'))>24 or args.base<0x10000 or not 1<=args.seconds<=86400:
         raise ValueError('Invalid name or stat address.')
     proc=psutil.Process(args.pid)
     exe=Path(proc.exe())
@@ -319,20 +320,27 @@ let hooks=[];try {
  if(!valid())throw Error('Character record changed.');p.add(4).writeFloat(100.99);p.add(44).writeFloat(100.99);
  send('Damage and Area hooks active.');
 } catch(e){hooks.forEach(h=>h.detach());throw e;}'''.replace('BASE',json.dumps(hex(args.base))).replace('NAME',json.dumps(args.name))
-    session=frida.attach(args.pid)
-    try:
-        ready=threading.Event();errors=[]
-        script=session.create_script(source)
-        def receive(message,data):
-            if message['type']=='error':errors.append(message.get('description','Hook failed.'))
-            elif message['type']=='send':print(message['payload'],flush=True)
-            ready.set()
-        script.on('message',receive);script.load()
-        if not ready.wait(5) or errors:raise RuntimeError(errors[0] if errors else 'Hook did not start.')
-        print('Press Ctrl+C to detach. Addresses must be rediscovered for a new run.',flush=True)
-        while proc.is_running():time.sleep(1)
-    except KeyboardInterrupt:pass
-    finally:session.detach()
+    with mutex('hook',0),StopSignal('hook') as signal:
+        signal.reset();session=frida.attach(args.pid)
+        try:
+            ready=threading.Event();errors=[]
+            script=session.create_script(source)
+            def receive(message,data):
+                if message['type']=='error':errors.append(message.get('description','Hook failed.'))
+                elif message['type']=='send':print(message['payload'],flush=True)
+                ready.set()
+            script.on('message',receive);script.load()
+            if not ready.wait(5) or errors:raise RuntimeError(errors[0] if errors else 'Hook did not start.')
+            print('Use hook-stop or Ctrl+C to detach. Addresses must be rediscovered for a new run.',flush=True)
+            deadline=time.monotonic()+args.seconds
+            while proc.is_running() and time.monotonic()<deadline and not signal.wait(1):pass
+        except KeyboardInterrupt:pass
+        finally:session.detach()
+
+def hook_stop():
+    """Request the current hook to detach, without requiring a console window."""
+    with StopSignal('hook') as signal:signal.request()
+    print('Hook stop requested.',flush=True)
 
 class AutoBackend:
     """Live access adapter. Discovery is incremental, cancellable and read-only."""
@@ -3090,6 +3098,7 @@ class WatcherWindow:
         update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
     def say(self,text):
         self.log.configure(state='normal');self.log.insert('end',time.strftime('%H:%M:%S  ')+text+'\n');self.log.see('end');self.log.configure(state='disabled')
+        if getattr(sys,'frozen',False):print(f'[GUI] {text}',flush=True)
     def run_task(self,work,label):
         if self.busy:return
         self.busy=True;self.say(label)
@@ -3166,14 +3175,22 @@ def gui():
     import tkinter as tk
     try:
         root=tk.Tk()
+        icon=RESOURCE_ROOT/'assets'/'trainer-icon.ico'
+        if icon.exists():root.iconbitmap(default=str(icon))
         if not SESSION.exists():seed_session()
         WatcherWindow(root);root.mainloop()
     except Exception:
-        import traceback;(ROOT/'gui-error.log').write_text(traceback.format_exc(),encoding='utf-8')
+        import traceback
+        with (ROOT/'trainer.log').open('a',encoding='utf-8') as log:traceback.print_exc(file=log)
 
 def self_test():
     import unittest
     class Tests(unittest.TestCase):
+        def test_hook_stop_signal_is_shared_between_handles(self):
+            suffix='hook-test-'+uuid.uuid4().hex
+            with StopSignal(suffix) as first, StopSignal(suffix) as second:
+                first.reset();self.assertFalse(first.wait(0))
+                second.request();self.assertTrue(first.wait(0))
         def recovery_fixture(self):
             class Backend:
                 def __init__(self):
@@ -3772,14 +3789,16 @@ if __name__ == '__main__':
     try:
         if command=='gui' or (command=='auto' and '--background' in sys.argv):
             if auto_update():restart_after_update()
-        if command not in ('setup','self-test','version','--version','--help','-h','help','gui','hook-current'):ensure_configured()
+        if command not in ('setup','self-test','version','--version','--help','-h','help','gui','hook-current','hook-stop'):ensure_configured()
         if command in ('start','_worker','named-core','_named_core','source-apply','lifesteal-test','apply-once','apply-host','capture','numeric-watch','text-watch','inspect-copy','observe-swaps','discover') and auto_alive(read()):
             raise RuntimeError('Automatic watcher is active. Stop it before running a competing writer or debugger.')
         if command == 'hook-current': hook_current()
+        elif command == 'hook-stop': hook_stop()
         elif command == 'status': status()
         elif command in ('--help','-h','help'):
             print('setup --game PATH --name NAME (first time) | Preferred: (no arguments) = window | --background = silent watcher | auto | new-game [--apply] | status | stop')
             print('Manual: resolve-name | discover-name --name <character> | named-core --seconds 600 --background')
+            print('Experimental: hook-current --pid PID --base ADDRESS --name CHARACTER [--seconds N] | hook-stop')
             print('Diagnostics: talents apply|restore|status | max-talents [--class mage] | relayout | find-wallet | self-test | watch-self-test | source-apply | lifesteal-test | discover | learn | adopt | capture | text-scan | text-watch | numeric-scan | numeric-watch | inspect-copy | observe-swaps')
             print('Each argument-based command accepts --help. Legacy start/apply-host were removed (they paused the game).')
         elif command in ('start','_worker','apply-host'):

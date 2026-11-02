@@ -1,4 +1,4 @@
-"""Build the reusable launcher and a release zip. Usage: python build_exe.py [--console]."""
+"""Build the reusable windowed launcher and a release zip."""
 import shutil
 import subprocess
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 NAME = 'AzerothSurvivorsTrainer'
-SHIPPED = ('game.py', 'README.md', 'CHANGELOG.md', 'LICENSE')
+SHIPPED = ('game.py', 'LICENSE')
 
 
 def version():
@@ -18,21 +18,20 @@ def version():
 
 
 def main():
-    console = '--console' in sys.argv
-    name = NAME + ('-console' if console else '')
+    if len(sys.argv) > 1:raise SystemExit('Usage: python build_exe.py')
+    name = NAME
     command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onefile',
-               '--console' if console else '--noconsole', '--name', name,
+               '--noconsole', '--name', name,
+               '--icon', str(ROOT / 'assets' / 'trainer-icon.ico'),
                '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build'), '--specpath', str(ROOT / 'build'),
                '--collect-all', 'PyMemoryEditor', '--collect-all', 'frida',
-               '--add-data', str(ROOT / 'profile.example.json') + ';.', str(ROOT / 'launcher' / 'launcher.py')]
+               '--add-data', str(ROOT / 'profile.example.json') + ';.',
+               '--add-data', str(ROOT / 'assets' / 'trainer-icon.ico') + ';assets', str(ROOT / 'launcher' / 'launcher.py')]
     subprocess.run(command, check=True)
     release = ROOT / 'release' / f'{NAME}-{version()}'
     shutil.rmtree(release, ignore_errors=True)
     release.mkdir(parents=True)
     shutil.copy2(ROOT / 'dist' / f'{name}.exe', release / f'{name}.exe')
-    console_exe = ROOT / 'dist' / f'{NAME}-console.exe'
-    if not console and console_exe.is_file():
-        shutil.copy2(console_exe, release / console_exe.name)
     for item in SHIPPED:
         shutil.copy2(ROOT / item, release / item)
     archive = ROOT / 'release' / f'{NAME}-{version()}.zip'

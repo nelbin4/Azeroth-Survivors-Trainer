@@ -1,6 +1,9 @@
 """Launch the adjacent trainer source using the bundled Python runtime."""
 import runpy
 import sys
+import os
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 # game.py is loaded from disk, so PyInstaller cannot see what it imports. Everything it needs is listed here.
@@ -35,4 +38,20 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if not getattr(sys, 'frozen', False):
+        main()
+    else:
+        # Windowed PyInstaller builds do not have stdout/stderr, including when
+        # started from a terminal. Give every invocation a persistent log instead.
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        with (folder() / 'trainer.log').open('a', encoding='utf-8', buffering=1) as log:
+            sys.stdout = sys.stderr = log
+            try:
+                command = sys.argv[1] if len(sys.argv) > 1 else 'gui'
+                print(f'\n[{datetime.now().isoformat(timespec="seconds")}] PID {os.getpid()} command {command}', flush=True)
+                main()
+            except Exception:
+                traceback.print_exc()
+                raise
+            finally:
+                sys.stdout, sys.stderr = original_stdout, original_stderr
