@@ -1,0 +1,39 @@
+name: Build and publish v1.9.6
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-v1.9.6.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.head_commit.message == 'Publish v1.9.6'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 4df46bb4286cc973fb83b40a68dee9c09c0a0e37
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Run tests
+        run: python game.py self-test
+      - name: Build launcher and package
+        run: python build_exe.py
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create v1.9.6
+          release/AzerothSurvivorsTrainer-1.9.6.zip
+          --repo ${{ github.repository }}
+          --target 4df46bb4286cc973fb83b40a68dee9c09c0a0e37
+          --title "1.9.6"
+          --notes "Single launcher with custom icon and trainer.log diagnostics. The experimental Damage and Area hook requires a manually verified address."
+          --latest
