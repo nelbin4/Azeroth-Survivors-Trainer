@@ -1,0 +1,41 @@
+name: Build and publish v1.9.5
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/publish-v1.9.5.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: github.event.head_commit.message == 'Publish v1.9.5'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 3631ea11fd7a816f85ef1c95d249352324b02b37
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Install build dependencies
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Run tests
+        run: python game.py self-test
+      - name: Build console launcher
+        run: python build_exe.py --console
+      - name: Build windowed launcher and package
+        run: python build_exe.py
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create v1.9.5
+          release/AzerothSurvivorsTrainer-1.9.5.zip
+          --repo ${{ github.repository }}
+          --target 3631ea11fd7a816f85ef1c95d249352324b02b37
+          --title "1.9.5 Experimental"
+          --notes "Reusable launcher with updateable game.py. Automatic character discovery remains experimental; the Damage and Area hook requires a manually verified address."
+          --prerelease
