@@ -20,12 +20,12 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.4'
+VERSION = '1.9.5'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, 'frozen', False) else Path(__file__).resolve().parent
-RESOURCE_ROOT = Path(__file__).resolve().parent
+RESOURCE_ROOT = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
 SESSION = ROOT / 'session.json'
 CHECKED_BUILDS = set()
 AUTO_CORE_OFFSETS = frozenset((0,4,8,12,16,20,24,28,32,36,40,44,48,52,56,60,64,68,72,112,120))
@@ -2477,12 +2477,28 @@ def apply_update_zip(data,target,current):
         temporary=destination.with_name(destination.name+'.new');temporary.write_bytes(content);os.replace(temporary,destination)
     return found.group(1)
 
+def apply_update_source(data,target,current):
+    """Validate and atomically replace only game.py, preserving a backup."""
+    import re,shutil
+    source=data.decode('utf-8')
+    compile(source,'game.py','exec')
+    found=re.search(r"^VERSION = '([\d.]+)'",source,re.M)
+    if not found or parse_version(found.group(1))<=parse_version(current):return None
+    target=Path(target);destination=target/'game.py'
+    if destination.exists():
+        backup=target/'.update_backup'/current;backup.mkdir(parents=True,exist_ok=True)
+        shutil.copy2(destination,backup/'game.py')
+    temporary=target/'game.py.new'
+    try:
+        temporary.write_bytes(data);os.replace(temporary,destination)
+    finally:
+        if temporary.exists():temporary.unlink()
+    return found.group(1)
+
 def update_from_zip(target=None):
-    import re
-    base=f'https://raw.githubusercontent.com/{REPO}/main/'
-    remote=re.search(r"^VERSION = '([\d.]+)'",http_get(base+'game.py',4000000,6).decode('utf-8'),re.M)
-    if not remote or parse_version(remote.group(1))<=parse_version(VERSION):return None
-    return apply_update_zip(http_get(f'https://github.com/{REPO}/archive/refs/heads/main.zip',20000000,40),target or ROOT,VERSION)
+    """Fetch only the source file used by the launcher."""
+    url=f'https://raw.githubusercontent.com/{REPO}/main/game.py'
+    return apply_update_source(http_get(url,4000000,6),target or ROOT,VERSION)
 
 def update_from_git():
     """Developer checkout: only a clean fast-forward; local work is never touched."""
@@ -2494,11 +2510,10 @@ def update_from_git():
 
 def auto_update():
     """At startup: fetch the latest release from GitHub. True means files were replaced and the caller should restart."""
-    if getattr(sys,'frozen',False):return False  # a bundled executable cannot update itself via source files
     if os.environ.get('AZEROTH_UPDATED'):return False
     try:
         if SESSION.exists() and not read().get('auto_update',True):return False
-        version=update_from_git() if (ROOT/'.git').exists() else update_from_zip()
+        version=update_from_git() if not getattr(sys,'frozen',False) and (ROOT/'.git').exists() else update_from_zip()
     except Exception:return False  # offline or GitHub unreachable: just start normally
     if version:
         try:
@@ -3367,6 +3382,17 @@ def self_test():
             os.environ['AZEROTH_UPDATED']='1'
             try:self.assertFalse(auto_update())  # the flag prevents an update loop after a restart
             finally:del os.environ['AZEROTH_UPDATED']
+        def test_source_update_changes_only_game_and_rejects_bad_code(self):
+            import tempfile
+            with tempfile.TemporaryDirectory() as folder:
+                folder=Path(folder);game=folder/'game.py';profile=folder/'profile.example.json'
+                game.write_text("VERSION = '1.0.0'\n",encoding='utf-8');profile.write_text('original',encoding='utf-8')
+                self.assertEqual(apply_update_source(b"VERSION = '1.1.0'\n",folder,'1.0.0'),'1.1.0')
+                self.assertEqual(game.read_text(),"VERSION = '1.1.0'\n")
+                self.assertEqual((folder/'.update_backup'/'1.0.0'/'game.py').read_text(),"VERSION = '1.0.0'\n")
+                self.assertEqual(profile.read_text(),'original')
+                with self.assertRaises(SyntaxError):apply_update_source(b"VERSION = '2.0.0'\ndef broken(:\n",folder,'1.1.0')
+                self.assertEqual(game.read_text(),"VERSION = '1.1.0'\n")
         def test_versions_compare_numerically_and_http_is_refused(self):
             self.assertTrue(parse_version('1.10.0')>parse_version('1.9.9'))
             with self.assertRaises(ValueError):http_get('http://example.com/x',10,1)

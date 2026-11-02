@@ -1,4 +1,4 @@
-"""Launch the bundled trainer source in a standalone executable."""
+"""Launch the adjacent trainer source using the bundled Python runtime."""
 import runpy
 import sys
 from pathlib import Path
@@ -24,9 +24,9 @@ def fail(message):
 
 
 def main():
-    game = (Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else folder()) / 'game.py'
+    game = folder() / 'game.py'
     if not game.is_file():
-        fail(f'The bundled game.py was not found:\n{game}')
+        fail(f'game.py was not found next to this program:\n{game.parent}')
     arguments = sys.argv[1:]
     if arguments and arguments[0].lower().endswith('game.py'):  # game.py re-launches itself as: <exe> game.py <command>
         arguments = arguments[1:]

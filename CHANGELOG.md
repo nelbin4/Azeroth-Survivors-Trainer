@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.5 (experimental)
+
+- Return to a reusable launcher that loads the adjacent `game.py` and bundles its default profile.
+- Update only `game.py` from GitHub after validating it; keep a backup of the previous version.
+- A launcher rebuild is still needed when its Python runtime or bundled dependencies change.
+
 # 1.9.4 (experimental)
 
 - Disable the unsafe candidate-write probe used by automatic pattern discovery. This may leave some runs without an automatic match.

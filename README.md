@@ -1,8 +1,8 @@
 # Azeroth Survivors Trainer
 
-> **1.9.4 experimental:** Automatic pattern-based live-record selection is disabled because it wrote to unverified candidates, including in observe-only mode. Automatic application may therefore wait indefinitely on some builds. The new Damage/Area hook requires a manually verified address and the exact supported game build; it does not automatically rediscover characters. Do not use the hook with another trainer or hook at the same instructions.
+> **Experimental:** Automatic pattern-based live-record selection is disabled because it wrote to unverified candidates, including in observe-only mode. Automatic application may therefore wait indefinitely on some builds. The Damage/Area hook requires a manually verified address and the exact supported game build; it does not automatically rediscover characters. Do not use the hook with another trainer or hook at the same instructions.
 
-> The Windows executable is standalone and includes `game.py` and Frida. Its source-file updater is disabled: install a newer executable for updates. The Python-source installation retains its existing updater.
+> The Windows launcher bundles Python, its dependencies, and the default profile. Keep `game.py` beside the executable; a compatible trainer update replaces only that file.
 
 An experimental Windows trainer for Azeroth Survivors. Support varies by game build and character layout; automatic discovery can remain blocked when a record cannot be verified.
 
@@ -15,7 +15,7 @@ An experimental Windows trainer for Azeroth Survivors. Support varies by game bu
 - **Doesn't pause the game.** It works quietly in the background while you play.
 - **Optional talent cap and max talents.** Raise your talent point cap (51 in the game) to 150, then max every talent for one class or all nine.
 - **Easy to switch off.** Untick any stat, switch to *Observe only*, or press *Stop* at any time.
-- **Updates:** source installations can update from GitHub; replace the standalone executable to update it.
+- **Updates:** the launcher can update `game.py` from GitHub. A new launcher is required when Python or bundled dependencies change.
 
 ## Get started in 3 steps
 
@@ -45,7 +45,7 @@ Everything below is for people who want to know more or to use the command line.
 
 ### Option A: the Windows program (no Python needed)
 
-Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. The executable includes the trainer code and dependencies. The first start takes a few seconds while the bundled libraries unpack. Install a new executable to update it. Command-line commands print nothing from this windowed exe; use Python or a console build for those.
+Download the release zip, unzip it anywhere, and double-click **`AzerothSurvivorsTrainer.exe`**. Keep `game.py` in the same folder. The executable bundles Python, the dependencies and the default profile; the first start takes a few seconds while they unpack. Command-line commands print nothing from the windowed exe; use Python or the console executable for those.
 
 > Windows SmartScreen or your antivirus may warn about an unsigned program that reads another program's memory. That is expected for any trainer; the source of everything is in this repository.
 
@@ -87,14 +87,14 @@ For the game executable with SHA-256 `0e8e314df4d78ab211b1bef5c48d78d713ed642608
 
 ## Updates
 
-The standalone executable does not update itself. The source-update behavior below applies only to Python installations.
+The launcher downloads only `game.py` when a newer version is available. It compiles the downloaded source before replacing the file and backs up the previous version under `.update_backup/`. Profiles, settings and saves are not replaced. Updates come from this repository's `main` branch and can be disabled in Settings. Source checkouts still use a clean Git fast-forward.
 
-At startup (the window, or `--background`) the trainer checks GitHub for a newer version, downloads it, checks that the new code compiles, replaces the program files, and restarts itself. This takes a couple of seconds and is skipped silently when you are offline.
+At startup (the window, or `--background`) the trainer checks GitHub for a newer version and restarts after a successful source update. It skips the check when offline.
 
-- **What is replaced:** `game.py`, the docs, `profile.example.json`, `requirements.txt`. Your `session.json` and saves are never touched. Replaced files are backed up in `.update_backup/<old version>/`.
+- **What is replaced:** only `game.py`. Your `session.json`, profile, and saves are not changed by the updater. The previous `game.py` is backed up in `.update_backup/<old version>/`.
 - **Git checkouts** (developers) only fast-forward when you have no uncommitted changes.
 - **Trust:** updates come over HTTPS from this repository's `main` branch. Switch it off with the window's *Check GitHub for updates* box, or `"auto_update": false` in `session.json`, or start with `--no-update`.
-- If an update adds a new dependency, run `pip install -r requirements.txt` after it (the exe needs a newer exe from the releases instead).
+- If an update adds a dependency or requires a newer Python runtime, install a newer launcher executable. Python installations may need `pip install -r requirements.txt`.
 
 ## Using it
 
@@ -156,12 +156,12 @@ The trainer never records your screen. Only while **no run is active** it reads 
 - **State "blocked ambiguous"** — more than one character is in the game (a hosted lobby) and yours could not be told apart; keep the player frame visible on screen and it is picked from there.
 - **State "blocked"** — an unrecognised build is still being learned; stay in a run and level up once.
 - **Nothing happens** — run as administrator if the game is elevated.
-- **The exe does not start** — reinstall the release archive. Antivirus or SmartScreen may warn about an unsigned program.
+- **The exe does not start** — check that `game.py` is next to it, or reinstall the release archive. Antivirus or SmartScreen may warn about an unsigned program.
 - Errors from the window are written to `gui-error.log`.
 
 ## Development
 
-`launcher/launcher.py` loads the bundled `game.py`; PyInstaller packages it, the default profile, and the dependencies into the executable. Build it with:
+`launcher/launcher.py` loads the adjacent `game.py`; PyInstaller bundles the Python runtime and dependencies into the executable. Build it with:
 
 ```bash
 pip install pyinstaller
