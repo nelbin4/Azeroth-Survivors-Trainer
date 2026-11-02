@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.1'
+VERSION = '2.0.2'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -238,7 +238,7 @@ def find_characters(memory,process,recipe,cancelled=lambda:False,budget=40.):
 CORE_CHUNK = 4194304
 CORE_FIELDS = {  # extra stats pinned in pattern mode, per game build (offsets read off the character sheet)
     'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':{'Area':44},
-    '0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274':{'Area':44},  # the game executable this trainer runs against
+    '0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274':{'Luck':48,'Gold Bonus':52},  # the game executable this trainer runs against; Area is verified against the sheet at runtime
 }
 
 def core_window_ok(values):
@@ -305,6 +305,9 @@ def core_live(memory,bases,seconds=4.5):
     operation. A read-only, identity-verified replacement is still needed.
     """
     return []
+
+CORE_PRIORITY = ['Damage','Area','Luck','Gold Bonus']  # first: Damage and Area; second: the rest (pinned less often)
+FIRST_PRIORITY = ('Damage','Area')
 
 HOOK_BUILDS = {'0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274'}  # game executable SHA-256 values the hook's instruction offsets were verified against
 
@@ -570,7 +573,7 @@ class AutoBackend:
                 if attempt==2:raise
                 if self.signal.wait(.005):raise InterruptedError('Stop requested.')
     def applied_names(self):
-        if self.core:return ['Damage']+sorted(CORE_FIELDS.get(self.build,{}))
+        if self.core:return ['Damage','Area']+[n for n in CORE_PRIORITY[2:] if n in CORE_FIELDS.get(self.build,{})]
         return [t[0] for t in self.targets if not self.write_only or t[0] in self.write_only]
     def at(self,base):
         # Discovery never gets the relaxed health rule for an unknown identity.
@@ -672,7 +675,7 @@ class AutoBackend:
     def verify_area(self,base):
         """Find Area's field by matching the sheet's percentage, once per record; the offset is kept per game build for later runs."""
         digest=self.build;saved=(read().get('core_builds',{}).get(digest) or {}).get('area_offset')
-        if saved is not None and self.core_area_base==base:self.area_offset=saved;return
+        if saved is not None:self.area_offset=saved;return  # verified earlier for this exact game build
         now=time.monotonic()
         if now<getattr(self,'sheet_next',0):return
         self.sheet_next=now+10
@@ -685,9 +688,10 @@ class AutoBackend:
         update_session(lambda d:d.setdefault('core_builds',{}).setdefault(digest,{}).update(area_offset=hits[0]))
     def core_apply(self,candidate):
         # Repoll and freeze: the game resets Damage and Area on each level-up, so they are rewritten every pass while the run is active.
-        base=candidate['base'];fields={'Damage':4};pins=[]
+        base=candidate['base'];fields={'Damage':4,**CORE_FIELDS.get(self.build,{})};pins=[]
         if self.area_offset is None:self.verify_area(base)
         if self.area_offset is not None:fields['Area']=self.area_offset
+        fields={name:fields[name] for name in CORE_PRIORITY if name in fields}
         for name,offset in fields.items():
             want=next((v for n,o,f,v in self.base_targets if n==name),None)
             if want is not None and name not in self.disabled:pins.append((name,base+offset,struct.pack('<f',want),want))
@@ -697,6 +701,7 @@ class AutoBackend:
             if self.signal.wait(0):raise InterruptedError('Stop requested.')
             if n%10==0:self.core_candidate(base)  # stop at once if the record moved or changed shape
             for name,address,target,want in pins:
+                if name not in FIRST_PRIORITY and n%5:continue  # second priority is checked every fifth pass
                 if self.memory.read_bytes(address,4)!=target:self.memory.write_bytes(address,target);writes+=1
             n+=1;time.sleep(.02)
         return dict(writes=writes,values=dict(candidate['values'],**{name:want for name,address,target,want in pins}))

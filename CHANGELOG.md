@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.2 (experimental)
+
+- Luck and Gold are applied on game build `0e8e…` as second priority, after Damage and Area. Luck is at offset +48 and Gold at +52; both were confirmed by writing a test value and watching the Run Stats panel, then restoring.
+- Priority: Damage and Area are checked every pass; Luck and Gold every fifth pass.
+- Area uses the offset saved for this game build, so it no longer needs the character sheet after each restart.
+
 ## 2.0.1 (experimental)
 
 - Damage and Area are applied on game build `0e8e…` in every run: Damage is pinned, and Area is pinned at the field verified against the character sheet.
