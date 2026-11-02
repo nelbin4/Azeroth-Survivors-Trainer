@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.9.9 (experimental)
+
+- **Simpler window.** The main window shows the status card, the stats this build holds with their values, the Talents box and Launch Game / Settings. Settings is a dialog with General, Stats and targets, and Log tabs. The log keeps recent lines while the dialog is closed.
+- Shows the version in the window footer.
+
 ## 1.9.8 (experimental)
 
 - Report unavailable automatic character discovery as blocked instead of indefinitely looking, and show unverified stats accurately. This does not add automatic discovery for the affected build.

@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '1.9.8'
+VERSION = '1.9.9'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2950,27 +2950,29 @@ class WatcherWindow:
         import tkinter as tk
         from tkinter import ttk
         self.tk=tk;self.ttk=ttk;self.root=root;self.last_state=None;self.digest=None;self.memory=None;self.mem_pid=None;self.busy=False;self.alive=False
-        root.title(APP_NAME);root.minsize(500,0)
-        card=ttk.Frame(root,padding=(14,12),relief='groove');card.pack(fill='x',padx=12,pady=(12,6))
+        root.title(APP_NAME);root.minsize(480,0)
+        self.log=None;self.log_lines=[];self.applied_shown=None;self.applied_vars={}
+        self.mode=tk.StringVar(value='write')
+        self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
+        self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
+        self.field_vars={};self.live_vars={};self.row_widgets={}
+        card=ttk.Frame(root,padding=(14,12),relief='groove');card.pack(fill='x',padx=12,pady=(12,8))
         self.dot=tk.Canvas(card,width=14,height=14,highlightthickness=0);self.dot_id=self.dot.create_oval(2,2,12,12,fill='#6b6b6b',outline='');self.dot.pack(side='left',padx=(0,10))
         text=ttk.Frame(card);text.pack(side='left',fill='x',expand=True)
         self.headline=tk.StringVar(value='...');self.sub=tk.StringVar(value='')
         ttk.Label(text,textvariable=self.headline,font=('Segoe UI',12,'bold')).pack(anchor='w')
         ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=330).pack(anchor='w')
         self.toggle_button=ttk.Button(card,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='right')
-        self.mode=tk.StringVar(value='write')
-        self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
-        self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
-        self.field_vars={};self.live_vars={};self.row_widgets={}
-        tabs=ttk.Notebook(root);tabs.pack(fill='both',expand=True,padx=12,pady=(0,6))
-        stats=ttk.Frame(tabs,padding=(6,6));talents=ttk.Frame(tabs,padding=(6,6));logs=ttk.Frame(tabs,padding=(6,6))
-        tabs.add(stats,text='Stats');tabs.add(talents,text='Talents');tabs.add(logs,text='Log')
-        self.build_stats(stats);self.build_talents(talents);self.build_log(logs)
+        shown=ttk.LabelFrame(root,text='Stats on this build');shown.pack(fill='x',padx=12,pady=(0,8))
+        self.stats_box=ttk.Frame(shown,padding=(8,4));self.stats_box.pack(fill='x')
+        box=ttk.LabelFrame(root,text='Talents');box.pack(fill='x',padx=12,pady=(0,8))
+        self.build_talents(box)
         foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(0,10))
         ttk.Button(foot,text='Launch Game',command=self.launch_game).pack(side='left',padx=(0,6))
         ttk.Button(foot,text='Settings',command=self.open_settings).pack(side='left')
         self.foot=tk.StringVar();ttk.Label(foot,textvariable=self.foot,foreground='#6b6b6b').pack(side='left',padx=10)
         ttk.Label(foot,text='Solo or host only',foreground='#b26a00').pack(side='right')
+        ttk.Label(foot,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right',padx=10)
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
         notice=read().get('update_notice')
@@ -2997,17 +2999,27 @@ class WatcherWindow:
     def open_settings(self):
         tk=self.tk;ttk=self.ttk
         if getattr(self,'settings_window',None) and self.settings_window.winfo_exists():self.settings_window.lift();return
-        win=self.settings_window=tk.Toplevel(self.root);win.title('Settings');win.transient(self.root);body=ttk.Frame(win,padding=14);body.pack(fill='both',expand=True)
-        modes=ttk.Frame(body);modes.pack(fill='x',pady=(0,6))
+        win=self.settings_window=tk.Toplevel(self.root);win.title('Settings');win.transient(self.root)
+        notebook=ttk.Notebook(win);notebook.pack(fill='both',expand=True,padx=10,pady=10)
+        general=ttk.Frame(notebook,padding=12);stats=ttk.Frame(notebook,padding=12);log=ttk.Frame(notebook,padding=12)
+        notebook.add(general,text='General');notebook.add(stats,text='Stats and targets');notebook.add(log,text='Log')
+        modes=ttk.Frame(general);modes.pack(fill='x',pady=(0,8))
         ttk.Label(modes,text='Mode').pack(side='left')
         ttk.Radiobutton(modes,text='Write',variable=self.mode,value='write').pack(side='left',padx=(8,4))
         ttk.Radiobutton(modes,text='Observe only',variable=self.mode,value='observe').pack(side='left')
-        cap=ttk.Frame(body);cap.pack(fill='x',pady=(0,6))
+        cap=ttk.Frame(general);cap.pack(fill='x',pady=(0,8))
         ttk.Label(cap,text='Talent point cap').pack(side='left')
         entry=ttk.Entry(cap,textvariable=self.talent_cap,width=6);entry.pack(side='left',padx=6)
         for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e:self.cap_changed())
-        self.build_settings(body)
-        ttk.Button(body,text="What's new",command=self.whats_new).pack(anchor='w',pady=(8,0))
+        self.build_settings(general)
+        ttk.Button(general,text="What's new",command=self.whats_new).pack(anchor='w',pady=(10,0))
+        self.build_stats(stats)
+        self.build_log(log)
+        self.log.configure(state='normal');self.log.insert('end',''.join(self.log_lines));self.log.see('end');self.log.configure(state='disabled')
+        win.protocol('WM_DELETE_WINDOW',self.close_settings)
+    def close_settings(self):
+        self.log=None;self.field_vars={};self.live_vars={};self.row_widgets={}
+        self.settings_window.destroy()
     def cap_changed(self):
         try:cap=self.talent_cap_value()
         except ValueError as error:
@@ -3019,6 +3031,17 @@ class WatcherWindow:
         update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))
         if self.talent_auto.get():self.talent_apply()
         else:self.talent_restore()
+    def refresh_applied(self,names):
+        if names==self.applied_shown:return
+        self.applied_shown=list(names)
+        for child in self.stats_box.winfo_children():child.destroy()
+        self.applied_vars={}
+        for name in names:
+            row=self.ttk.Frame(self.stats_box);row.pack(fill='x',pady=2)
+            self.ttk.Label(row,text=name,width=14).pack(side='left')
+            var=self.tk.StringVar(value='');self.applied_vars[name]=var
+            self.ttk.Label(row,textvariable=var,foreground='#2e7d32').pack(side='right')
+        self.ttk.Label(self.stats_box,text='Other stats are applied only on builds where they have been verified.',foreground='#6b6b6b',wraplength=430).pack(anchor='w',pady=(6,0))
     def build_rows(self):
         ttk=self.ttk;data=read();disabled=set(data.get('gui_disabled',[]))
         for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
@@ -3122,7 +3145,8 @@ class WatcherWindow:
         off=sorted(n for n,v in self.field_vars.items() if not v.get())
         update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
     def say(self,text):
-        self.log.configure(state='normal');self.log.insert('end',time.strftime('%H:%M:%S  ')+text+'\n');self.log.see('end');self.log.configure(state='disabled')
+        line=time.strftime('%H:%M:%S  ')+text+'\n';self.log_lines=(self.log_lines+[line])[-200:]
+        if self.log is not None:self.log.configure(state='normal');self.log.insert('end',line);self.log.see('end');self.log.configure(state='disabled')
         if getattr(sys,'frozen',False):print(f'[GUI] {text}',flush=True)
     def run_task(self,work,label):
         if self.busy:return
@@ -3179,6 +3203,12 @@ class WatcherWindow:
             try:values=self.live_values(monitor) if alive else {}
             except Exception:values={}
             applied=monitor.get('applied') if alive else None
+            shown=monitor.get('applied') or ['Damage']
+            self.refresh_applied(shown)
+            targets={n:v for n,_,_,v in data['config']['targets']}
+            for name,var in self.applied_vars.items():
+                pct=f"+{round((targets.get(name,1)-1)*100):,}%" if name in targets else ''
+                var.set(f"{pct}  ·  {'holding' if alive and state=='applying' else 'waiting' if alive else 'stopped'}")
             for name,(check,entry,offset) in self.row_widgets.items():
                 on=applied is None or name in applied
                 check.configure(state='normal' if on else 'disabled');entry.configure(state='normal' if on and offset!=20 else 'disabled')
