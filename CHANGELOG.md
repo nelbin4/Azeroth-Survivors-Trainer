@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.9.10 (experimental)
+
+- **Fix: the Damage and Area hook never started.** The hook's lock and its stop event shared one Windows name, so starting it failed with "The handle is invalid". The lock now has its own name.
+
 ## 1.9.9 (experimental)
 
 - **Simpler window.** The main window shows the status card, the stats this build holds with their values, the Talents box and Launch Game / Settings. Settings is a dialog with General, Stats and targets, and Log tabs. The log keeps recent lines while the dialog is closed.
