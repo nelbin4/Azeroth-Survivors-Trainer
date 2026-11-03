@@ -3228,10 +3228,10 @@ class WatcherWindow:
         ttk.Button(row,text='Log',command=self.open_log).pack(side='left',padx=(0,6))
         ttk.Button(row,text='GitHub',command=self.open_github).pack(side='left')
         row2=ttk.Frame(foot);row2.pack(fill='x')
-        ttk.Label(row2,text='This app is FREE! Play in solo or co-op host only.',foreground='#b26a00',wraplength=250,justify='left').pack(side='left')
+        ttk.Label(row2,text='This is FREE! Solo or Co-op Host only',foreground='#b26a00').pack(side='left')
+        ttk.Label(row2,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right')  # version on the right edge, same row
         row3=ttk.Frame(foot);row3.pack(fill='x')
         self.update_button=ttk.Button(row3,text='Update',command=self.update_now)  # hidden until GitHub has a newer version
-        ttk.Label(row3,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right')  # version on the right edge
         self.foot=tk.StringVar()
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
