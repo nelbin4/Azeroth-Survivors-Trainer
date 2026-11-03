@@ -1,3 +1,24 @@
+# MIT License
+#
+# Copyright (c) 2026 nelbin4
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 """Azeroth Survivors Trainer: name-guarded native stat tracing and non-pausing updates. See --help."""
 import json
 import os
@@ -20,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.3'
+VERSION = '2.0.4'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -534,7 +555,7 @@ class AutoBackend:
     def bind(self,generation):
         from PyMemoryEditor import OpenProcess
         self.close();self.process=self.found_process;self.generation=generation
-        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.core_base=None;self.core_pending=[];self.core_next=0;self.core_name=None;self.core_snap=None;self.area_offset=None;self.core_area_base=None;self.core_status=None
+        self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.core_base=None;self.core_pending=[];self.core_next=0;self.core_name=None;self.core_snap=None;self.area_offset=None;self.core_area_base=None;self.core_status=None;self.core_empty=None
         saved=read().get('core_builds',{}).get(self.build) or {}
         if saved.get('pid')==generation[0] and saved.get('created')==generation[1]:self.core_base=saved.get('base');self.core_delta=saved.get('delta')
         self.memory=OpenProcess(pid=generation[0],permission=0x438)
@@ -637,6 +658,13 @@ class AutoBackend:
         if now<self.core_next:return []
         self.core_next=now+8
         found=core_scan(self.memory,cancelled=lambda:self.signal.wait(0),first=[b for b,_ in self.core_pending])
+        if not found:
+            # Nothing matched the stat pattern: say so after a minute and leave a report for the next fix.
+            self.core_empty=self.core_empty or now
+            if now-self.core_empty>=60:
+                self.core_status='Could not find your stats for this game version. See discovery-report.txt in the trainer folder.'
+                write_discovery_report(self.process.pid,len(found),self.build)
+        else:self.core_empty=None
         # Only records with a plausible level and a text header can be the player's; the rest are other data that happens to match the stat pattern.
         found=[(b,d) for b,d in found if 1<=struct.unpack('<I',self.memory.read_bytes(b-104,4))[0]<=10000 and core_header_hits(self.memory,b)]
         self.core_pending=found;self.core_snap=None
@@ -666,6 +694,7 @@ class AutoBackend:
             if len(mine)!=1:self.ambiguous_names=['several characters'];return [self.core_candidate(b) for b in live]
             live=mine;delta=dict(self.core_pending)[live[0]];self.core_name=chosen
         self.core_base=live[0];self.core_delta=delta;self.core_pending=[];digest=self.build
+        trainer_log(f'locked onto character record at {hex(live[0])}, header distance {delta}')
         pid,created=self.generation[0],self.generation[1];base=self.core_base;name=self.core_name
         def store(d):
             old=d.setdefault('core_builds',{}).get(digest) or {}
@@ -690,6 +719,7 @@ class AutoBackend:
         hits=[h for h in find_stat_offsets(self.memory,base,0,expected_value=expected) if h!=4 and h not in set(saved.values())]
         if len(hits)!=1:self.core_status=f'{label} not verified: {len(hits)} fields match.';return None
         update_session(lambda d:d.setdefault('core_builds',{}).setdefault(digest,{}).setdefault('offsets',{}).update({name:hits[0]}));self.core_status=None
+        trainer_log(f'verified {name} at offset +{hits[0]} for build {digest[:12]}')
         return hits[0]
     def verify_area(self,base):
         """Find Area's field by matching the sheet's percentage, once per record; the offset is kept per game build for later runs."""
@@ -701,6 +731,7 @@ class AutoBackend:
         hits=[h for h in hits if h!=4]
         if len(hits)!=1:self.core_status=f'Area not verified: {len(hits)} fields match the sheet.';return
         self.area_offset=hits[0];self.core_area_base=base;self.core_status=None
+        trainer_log(f'verified Area at offset +{hits[0]} for build {digest[:12]}')
         update_session(lambda d:d.setdefault('core_builds',{}).setdefault(digest,{}).update(area_offset=hits[0]))
     def core_apply(self,candidate):
         # Repoll and freeze: the game resets Damage and Area on each level-up, so they are rewritten every pass while the run is active.
@@ -914,7 +945,7 @@ class AutoRecovery:
             self.backend.close();self.generation=None;self.forget();self.state=dict(state='blocked',reason=str(error))
         except InterruptedError:raise
         except Exception as error:
-            self.failures+=1;self.state=dict(state='recovering',reason=str(error),failures=self.failures)
+            self.failures+=1;self.state=dict(state='recovering',reason=str(error),failures=self.failures);trainer_log(f'error (attempt {self.failures}): {error!r}')
             if self.failures>=3:self.forget()
         return self.state
 
@@ -978,7 +1009,7 @@ def auto_command():
                             except Exception:pass
                         threading.Thread(target=talents_job,daemon=True).start()
                 if state.get('state')!=last_state:
-                    print(json.dumps(state),flush=True);last_state=state.get('state')
+                    print(json.dumps(state),flush=True);trainer_log('state '+json.dumps(state));last_state=state.get('state')
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
                     runtime.update(state);runtime['reason']=state.get('reason');runtime['status']=getattr(backend,'core_status',None);runtime['character']=backend.name;runtime.update(heartbeat=time.time(),game_pid=engine.generation[0] if engine.generation else None,
                         game_created=engine.generation[1] if engine.generation else None,scan_bytes=backend.scan_bytes,
@@ -2587,6 +2618,22 @@ def find_stat_offsets(memory,base,percent,span=(0,256),expected_value=None):
         if abs(value-expected)<=max(0.005,expected*0.002):hits.append(span[0]+off)
     return hits
 
+def trainer_log(message):
+    """Append one timestamped line to trainer.log next to the program. Never raises: logging must not stop the watcher."""
+    try:
+        with (ROOT/'trainer.log').open('a',encoding='utf-8') as log:log.write(time.strftime('%Y-%m-%d %H:%M:%S  ')+str(message)+chr(10))
+    except OSError:pass
+
+def write_discovery_report(pid,hits,build):
+    """Write what the trainer searched for and found, so a failed search can be diagnosed after a game patch."""
+    import platform
+    exe=Path(psutil.Process(pid).exe())
+    lines=[f'time: {time.strftime("%Y-%m-%d %H:%M:%S")}',f'trainer: {VERSION}',f'game executable: {exe}',f'game build (SHA-256): {build}',
+           f'stat pattern matches: {hits}',f'windows: {platform.version()}',
+           'what was searched: eight stat fields in order (health, damage, haste, crit, crit damage, speed, pickup, experience) next to a text header.',
+           'what to do: send this file with the game version to the maintainer.']
+    (ROOT/'discovery-report.txt').write_text(chr(10).join(lines)+chr(10),encoding='utf-8')
+
 def window_name_candidates(pid):
     """Names shown top-left in the player frame, nearest the top first (single-word OCR lines only)."""
     import re
@@ -3097,7 +3144,7 @@ class WatcherWindow:
         import tkinter as tk
         from tkinter import ttk
         self.tk=tk;self.ttk=ttk;self.root=root;self.last_state=None;self.digest=None;self.memory=None;self.mem_pid=None;self.busy=False;self.alive=False
-        root.title(APP_NAME);root.minsize(480,0)
+        root.title(APP_NAME);root.geometry('320x320');root.resizable(False,False)  # small square, fixed size
         self.log=None;self.log_lines=[];self.applied_shown=None;self.applied_vars={}
         self.mode=tk.StringVar(value='write')
         self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
@@ -3107,17 +3154,21 @@ class WatcherWindow:
         self.dot=tk.Canvas(card,width=14,height=14,highlightthickness=0);self.dot_id=self.dot.create_oval(2,2,12,12,fill='#6b6b6b',outline='');self.dot.pack(side='left',padx=(0,10))
         text=ttk.Frame(card);text.pack(side='left',fill='x',expand=True)
         self.headline=tk.StringVar(value='...');self.sub=tk.StringVar(value='')
-        ttk.Label(text,textvariable=self.headline,font=('Segoe UI',12,'bold')).pack(anchor='w')
-        ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=330).pack(anchor='w')
-        self.toggle_button=ttk.Button(card,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='right')
+        ttk.Label(text,textvariable=self.headline,font=('Segoe UI',11,'bold'),wraplength=190).pack(anchor='w')
+        ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=190).pack(anchor='w')
+        buttons=ttk.Frame(text);buttons.pack(anchor='w',pady=(8,0))  # under the status text
+        self.toggle_button=ttk.Button(buttons,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='left')
+        self.launch_button=ttk.Button(buttons,text='Launch Game',command=self.launch_game);self.launch_button.pack(side='left',padx=(6,0))  # same row as Stop
         shown=ttk.LabelFrame(root,text='Stats on this build')  # kept but not shown: stats are applied in the background
         self.stats_box=ttk.Frame(shown,padding=(8,4));self.stats_box.pack(fill='x')
-        foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(0,10))
-        ttk.Button(foot,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
-        ttk.Button(foot,text='Launch Game',command=self.launch_game).pack(side='left',padx=(0,6))
-        ttk.Button(foot,text='Settings',command=self.open_settings).pack(side='left')
+        foot=ttk.Frame(root);foot.pack(side='bottom',fill='x',padx=12,pady=(0,10))
+        row=ttk.Frame(foot);row.pack(fill='x',pady=(0,6))
+        ttk.Button(row,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
+        ttk.Button(row,text='Settings',command=self.open_settings).pack(side='left',padx=(0,6))
+        ttk.Button(row,text='GitHub',command=self.open_github).pack(side='left')
+        row2=ttk.Frame(foot);row2.pack(fill='x')
+        ttk.Label(row2,text='Solo or host only',foreground='#b26a00').pack(side='left')
         self.foot=tk.StringVar()
-        ttk.Label(foot,text='Solo or host only',foreground='#b26a00').pack(side='right')
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
         notice=read().get('update_notice')
@@ -3126,6 +3177,9 @@ class WatcherWindow:
         self.refresh()
         if not configured():root.after(400,self.locate_game)  # first run: the window is up, now ask where the game is
         elif not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
+    def open_github(self):
+        import webbrowser
+        webbrowser.open(f'https://github.com/{REPO}')
     def open_talents(self):
         tk=self.tk;ttk=self.ttk
         if getattr(self,'talents_window',None) and self.talents_window.winfo_exists():self.talents_window.lift();return
@@ -3295,6 +3349,7 @@ class WatcherWindow:
         off=sorted(n for n,v in self.field_vars.items() if not v.get())
         update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
     def say(self,text):
+        trainer_log('gui '+text)
         line=time.strftime('%H:%M:%S  ')+text+'\n';self.log_lines=(self.log_lines+[line])[-200:]
         if self.log is not None:self.log.configure(state='normal');self.log.insert('end',line);self.log.see('end');self.log.configure(state='disabled')
         if getattr(sys,'frozen',False):print(f'[GUI] {text}',flush=True)
@@ -3334,6 +3389,16 @@ class WatcherWindow:
             with Path(data['game_exe']).open('rb') as stream:self.digest=hashlib.file_digest(stream,'sha256').hexdigest().lower()
         raw=self.memory.read_bytes(int(base,16)-24,1400)
         return {n:struct.unpack_from('<'+f,raw,off+24)[0] for n,off,f,_ in effective_targets(data,self.digest)}
+    def game_running(self):
+        """True when the configured game executable is already running. Checked at most every 2 seconds."""
+        now=time.monotonic()
+        if now<getattr(self,'running_next',0):return self.running_cache
+        self.running_next=now+2
+        try:
+            target=os.path.normcase(str(Path(read()['game_exe']).resolve()))
+            self.running_cache=any(os.path.normcase(p.info['exe'] or '')==target for p in psutil.process_iter(['exe']))
+        except Exception:self.running_cache=False
+        return self.running_cache
     def refresh(self):
         try:
             if not configured():
@@ -3341,11 +3406,11 @@ class WatcherWindow:
                 self.dot.itemconfigure(self.dot_id,fill='#b26a00');self.toggle_button.configure(text='Locate game',width=12)
                 self.root.after(1000,self.refresh);return
             self.toggle_button.configure(width=8)
+            self.launch_button.configure(state='disabled' if self.game_running() else 'normal')
             data=read();monitor=data.get('auto_monitor',{});alive=auto_alive(data);self.alive=alive
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.headline.set(STATE_TITLES.get(state,state.replace('_',' ').capitalize()));self.dot.itemconfigure(self.dot_id,fill=self.COLORS.get(state,'#6b6b6b'))
-            level=monitor.get('level')
-            self.sub.set(monitor.get('status') if alive and monitor.get('status') else f"Level {level}" if level and alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
+            self.sub.set(monitor.get('status') if alive and monitor.get('status') else '' if alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
             self.toggle_button.configure(text='Stop' if alive else 'Start')
             if not self.busy and time.monotonic()>=getattr(self,'talent_next',0):
                 self.talent_next=time.monotonic()+4;self.talent_status.set(self.describe_talents(data))

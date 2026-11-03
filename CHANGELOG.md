@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.4 (experimental)
+
+- Logs: `trainer.log` records window messages, state changes, errors, record lock-on and each verified offset.
+- If the stat pattern is not found for a minute, the window says so and writes `discovery-report.txt` for diagnosis.
+- Window: fixed 320 x 320, with Stop and Launch Game under the status text. Launch Game is greyed out while the game is running. The stats list is hidden.
+- GitHub button opens the project page.
+- The release zip no longer contains a separate LICENSE file; the MIT notice is at the top of `game.py`.
+
 ## 2.0.3 (experimental)
 
 - Damage, Area, Luck and Gold are discovered and applied on the current game build. Area, Luck and Gold are verified from the character panel and Run Stats box once per game version; the offsets are then saved.

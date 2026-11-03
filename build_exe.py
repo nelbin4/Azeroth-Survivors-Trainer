@@ -7,7 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 NAME = 'AzerothSurvivorsTrainer'
-SHIPPED = ('game.py', 'LICENSE')
+SHIPPED = ('game.py',)  # game.py carries the MIT notice at its top, so the zip needs no separate LICENSE file
 
 
 def version():
