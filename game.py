@@ -20,7 +20,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.2'
+VERSION = '2.0.3'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -672,25 +672,45 @@ class AutoBackend:
             d['core_builds'][digest]=dict(delta=delta,found=time.time(),pid=pid,created=created,base=base,name=name or old.get('name'))
         update_session(store)
         return [self.core_candidate(self.core_base)]
+    def panel_percents(self):
+        """One screen read of the stat boxes every 10 seconds, shared by all verifications."""
+        now=time.monotonic()
+        if now>=getattr(self,'panel_next',0):
+            self.panel_next=now+10;self.panel_cache=read_sheet_percents(self.process.pid,('Area','Luck','Gold'))
+        return self.panel_cache
+    VERIFY_SOURCE={'Area':('character sheet',lambda pct:1+pct/100),'Gold Bonus':('Run Stats',lambda pct:1+pct/100),'Luck':('Run Stats',lambda pct:pct/100)}
+    VERIFY_LABEL={'Area':'Area','Gold Bonus':'Gold','Luck':'Luck'}
+    def verify_field(self,base,name):
+        """Find a field by matching its on-screen percentage (sheet or Run Stats); the offset is kept per game build."""
+        digest=self.build;saved=(read().get('core_builds',{}).get(digest) or {}).get('offsets',{})
+        if name in saved:return saved[name]
+        label=self.VERIFY_LABEL[name];percents=self.panel_percents()
+        if label not in percents:self.core_status='Open your character panel (or press C) so the trainer can scan your stats.';return None
+        expected=self.VERIFY_SOURCE[name][1](percents[label])
+        hits=[h for h in find_stat_offsets(self.memory,base,0,expected_value=expected) if h!=4 and h not in set(saved.values())]
+        if len(hits)!=1:self.core_status=f'{label} not verified: {len(hits)} fields match.';return None
+        update_session(lambda d:d.setdefault('core_builds',{}).setdefault(digest,{}).setdefault('offsets',{}).update({name:hits[0]}));self.core_status=None
+        return hits[0]
     def verify_area(self,base):
         """Find Area's field by matching the sheet's percentage, once per record; the offset is kept per game build for later runs."""
         digest=self.build;saved=(read().get('core_builds',{}).get(digest) or {}).get('area_offset')
         if saved is not None:self.area_offset=saved;return  # verified earlier for this exact game build
-        now=time.monotonic()
-        if now<getattr(self,'sheet_next',0):return
-        self.sheet_next=now+10
-        percents=read_sheet_percents(self.process.pid)
-        if 'Area' not in percents:self.core_status='Open the character sheet so Area can be verified.';return
+        percents=self.panel_percents()
+        if 'Area' not in percents:self.core_status='Open your character panel (or press C) so the trainer can scan your stats.';return
         hits=find_stat_offsets(self.memory,base,percents['Area'])
         hits=[h for h in hits if h!=4]
         if len(hits)!=1:self.core_status=f'Area not verified: {len(hits)} fields match the sheet.';return
-        self.area_offset=hits[0];self.core_area_base=base
+        self.area_offset=hits[0];self.core_area_base=base;self.core_status=None
         update_session(lambda d:d.setdefault('core_builds',{}).setdefault(digest,{}).update(area_offset=hits[0]))
     def core_apply(self,candidate):
         # Repoll and freeze: the game resets Damage and Area on each level-up, so they are rewritten every pass while the run is active.
-        base=candidate['base'];fields={'Damage':4,**CORE_FIELDS.get(self.build,{})};pins=[]
-        if self.area_offset is None:self.verify_area(base)
-        if self.area_offset is not None:fields['Area']=self.area_offset
+        base=candidate['base'];fields={'Damage':4};pins=[]
+        for name in ('Area','Luck','Gold Bonus'):
+            offset=CORE_FIELDS.get(self.build,{}).get(name)
+            if offset is None and name=='Area' and self.area_offset is None:self.verify_area(base)
+            if offset is None and name in self.VERIFY_SOURCE:offset=self.verify_field(base,name)
+            if offset is None and name=='Area':offset=self.area_offset
+            if offset is not None:fields[name]=offset
         fields={name:fields[name] for name in CORE_PRIORITY if name in fields}
         for name,offset in fields.items():
             want=next((v for n,o,f,v in self.base_targets if n==name),None)
@@ -850,9 +870,6 @@ class AutoRecovery:
                 self.backend.bind(generation);self.generation=generation;self.forget()
             if getattr(self.backend,'learning',False):
                 self.state=self.backend.learn(now);return self.state
-            if getattr(self.backend,'core',False) and self.backend.build not in HOOK_BUILDS:
-                self.state=dict(state='blocked',reason='Automatic character discovery is unavailable for this game build; no stats were changed.')
-                return self.state
             if self.candidate is None:
                 candidates=self.backend.seek(now)
                 if not candidates and hasattr(self.backend,'refresh_scene'):self.backend.refresh_scene(now)
@@ -963,7 +980,7 @@ def auto_command():
                 if state.get('state')!=last_state:
                     print(json.dumps(state),flush=True);last_state=state.get('state')
                 if time.monotonic()-last_save>=10 or state.get('state')!=last_saved:
-                    runtime.update(state);runtime['reason']=state.get('reason');runtime['character']=backend.name;runtime.update(heartbeat=time.time(),game_pid=engine.generation[0] if engine.generation else None,
+                    runtime.update(state);runtime['reason']=state.get('reason');runtime['status']=getattr(backend,'core_status',None);runtime['character']=backend.name;runtime.update(heartbeat=time.time(),game_pid=engine.generation[0] if engine.generation else None,
                         game_created=engine.generation[1] if engine.generation else None,scan_bytes=backend.scan_bytes,
                         scan_errors=backend.scan_errors,missing_source_kinds=backend.missing_sources,applied=[] if state.get('state')=='blocked' else backend.applied_names())
                     def publish(current):
@@ -2530,34 +2547,40 @@ def window_player_name(pid,names):
 
 NAME_STOPWORDS = {'gold','damage','done','level','boss','next','lobby','menu','options','kills','time','exp','wave','host','players','player','you','the','and'}
 
-def read_sheet_percents(pid):
-    """Read-only: the Damage and Area percentages shown on the character sheet, or {} when the sheet is not on screen.
-    Each label is found on screen, then the small value beside it is read from an enlarged crop, since OCR misses small text."""
+# Where the character stats (Area, Health, Damage...) and the Run Stats box (Luck, Gold...) appear, as fractions of the game window.
+PANEL_REGIONS = ((0.03, 0.44, 0.25, 0.60), (0.22, 0.12, 0.37, 0.36))
+
+def read_sheet_percents(pid,names=('Damage','Area')):
+    """Read-only: percentages shown on the same row as the given labels in the character stats and Run Stats boxes.
+    Only those two small regions are scanned, enlarged first so small text reads reliably."""
     import re
     from PIL import Image
     handle=game_window(pid)
     if not handle:return {}
-    path=shot_path('sheet');capture_window(handle,path)
-    image=Image.open(path).convert('RGB').copy()  # load first: the OCR step removes the capture file
-    lines=ocr_lines(path)
+    path=shot_path('panel');capture_window(handle,path)
+    whole=Image.open(path).convert('RGB').copy()  # load first: the OCR step removes the capture file
+    keys={'Damage':'damage','Area':'area','Luck':'luck','Gold':'gold'}
     found={}
-    for name in ('Damage','Area'):
-        for x1,y1,x2,y2,text in lines:
-            if name.lower() not in text.lower():continue
-            crop=image.crop((max(0,x2-4),max(0,y1-6),min(image.width,x2+120),min(image.height,y2+6)))
-            crop=crop.resize((crop.width*4,crop.height*4),Image.LANCZOS)
-            crop_path=shot_path(name.lower()+'-value');crop.save(crop_path)
-            values=[text2 for *_,text2 in ocr_lines(crop_path)]
-            for text2 in values:
-                m=re.search(r'\+?(\d+(?:\.\d+)?)\s*%',text2)
-                if m:found[name]=float(m.group(1));break
-            if name in found:break
+    for index,(fx1,fy1,fx2,fy2) in enumerate(PANEL_REGIONS):
+        image=whole.crop((int(whole.width*fx1),int(whole.height*fy1),int(whole.width*fx2),int(whole.height*fy2)))
+        image=image.resize((image.width*3,image.height*3),Image.LANCZOS)
+        region_path=shot_path(f'region{index}');image.save(region_path)
+        lines=ocr_lines(region_path)
+        values=[(x1,(y1+y2)/2,text.replace(' ','')) for x1,y1,x2,y2,text in lines if re.fullmatch(r'\+?\d+(\.\d+)?%',text.replace(' ',''))]  # OCR often reads '+ 36%'
+        for name in names:
+            if name in found:continue
+            for x1,y1,x2,y2,text in lines:
+                label=text.strip().replace(' ','').lower()
+                if keys.get(name) not in label or len(label)>12:continue
+                cy=(y1+y2)/2;row=[(x,v) for x,vy,v in values if x>=x2-4 and abs(vy-cy)<=max(12,(y2-y1)*1.2)]
+                if row:
+                    x,v=min(row);found[name]=float(re.search(r'\d+(\.\d+)?',v).group(0));break
     return found
 
-def find_stat_offsets(memory,base,percent,span=(0,256)):
-    """Read-only: float field offsets whose raw value equals the sheet's multiplier (1 + percent/100)."""
+def find_stat_offsets(memory,base,percent,span=(0,256),expected_value=None):
+    """Read-only: float field offsets whose raw value equals the expected multiplier (default 1 + percent/100)."""
     import struct as _s
-    expected=1+percent/100;raw=memory.read_bytes(base+span[0],span[1]-span[0])
+    expected=expected_value if expected_value is not None else 1+percent/100;raw=memory.read_bytes(base+span[0],span[1]-span[0])
     hits=[]
     for off in range(0,len(raw)-3,4):
         value=_s.unpack_from('<f',raw,off)[0]
@@ -3087,7 +3110,7 @@ class WatcherWindow:
         ttk.Label(text,textvariable=self.headline,font=('Segoe UI',12,'bold')).pack(anchor='w')
         ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=330).pack(anchor='w')
         self.toggle_button=ttk.Button(card,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='right')
-        shown=ttk.LabelFrame(root,text='Stats on this build');shown.pack(fill='x',padx=12,pady=(0,8))
+        shown=ttk.LabelFrame(root,text='Stats on this build')  # kept but not shown: stats are applied in the background
         self.stats_box=ttk.Frame(shown,padding=(8,4));self.stats_box.pack(fill='x')
         foot=ttk.Frame(root);foot.pack(fill='x',padx=12,pady=(0,10))
         ttk.Button(foot,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
@@ -3322,7 +3345,7 @@ class WatcherWindow:
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.headline.set(STATE_TITLES.get(state,state.replace('_',' ').capitalize()));self.dot.itemconfigure(self.dot_id,fill=self.COLORS.get(state,'#6b6b6b'))
             level=monitor.get('level')
-            self.sub.set(f"Level {level}" if level and alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
+            self.sub.set(monitor.get('status') if alive and monitor.get('status') else f"Level {level}" if level and alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
             self.toggle_button.configure(text='Stop' if alive else 'Start')
             if not self.busy and time.monotonic()>=getattr(self,'talent_next',0):
                 self.talent_next=time.monotonic()+4;self.talent_status.set(self.describe_talents(data))
@@ -3474,13 +3497,11 @@ def self_test():
             for _ in range(5):self.assertEqual(engine.step()['state'],'blocked_ambiguous')  # nothing moves: stay blocked
             for index in range(5):hp[0]-=1;clock[0]+=1;state=engine.step()
             self.assertNotEqual(state['state'],'blocked_ambiguous');self.assertEqual(engine.candidate['base'],backend.base)
-        def test_disabled_core_reports_blocked_without_searching_or_writing(self):
+        def test_unverified_core_build_discovers_but_writes_nothing(self):
             backend,clock,engine=self.recovery_fixture();backend.core=True;backend.build='some-other-build'
-            def forbidden(_):raise AssertionError('Disabled discovery must not scan candidates.')
-            backend.seek=forbidden
+            backend.seek=lambda now:[]
             state=engine.step()
-            self.assertEqual(state['state'],'blocked')
-            self.assertIn('unavailable',state['reason'])
+            self.assertNotEqual(state['state'],'blocked')
             self.assertEqual(backend.writes,[])
         def test_failed_step_clears_duplicate_history(self):
             backend,clock,engine=self.recovery_fixture();backend.ambiguous=True

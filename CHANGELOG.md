@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.3 (experimental)
+
+- Damage, Area, Luck and Gold are discovered and applied on the current game build. Area, Luck and Gold are verified from the character panel and Run Stats box once per game version; the offsets are then saved.
+- The stat scan reads only the two stat boxes, and small values such as '+ 36%' are read correctly.
+- A prompt in the window asks you to open your character panel when a value still needs verifying.
+
 ## 2.0.2 (experimental)
 
 - Luck and Gold are applied on game build `0e8e…` as second priority, after Damage and Area. Luck is at offset +48 and Gold at +52; both were confirmed by writing a test value and watching the Run Stats panel, then restoring.
