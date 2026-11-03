@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.5'
+VERSION = '2.0.6'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -3144,7 +3144,7 @@ class WatcherWindow:
         import tkinter as tk
         from tkinter import ttk
         self.tk=tk;self.ttk=ttk;self.root=root;self.last_state=None;self.digest=None;self.memory=None;self.mem_pid=None;self.busy=False;self.alive=False
-        root.title(APP_NAME);root.geometry('320x320');root.resizable(False,False)  # small square, fixed size
+        root.title(APP_NAME);root.geometry('320x220');root.resizable(False,False)  # compact, fixed size
         self.log=None;self.log_lines=[];self.applied_shown=None;self.applied_vars={}
         self.mode=tk.StringVar(value='write')
         self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
@@ -3154,20 +3154,22 @@ class WatcherWindow:
         self.dot=tk.Canvas(card,width=14,height=14,highlightthickness=0);self.dot_id=self.dot.create_oval(2,2,12,12,fill='#6b6b6b',outline='');self.dot.pack(side='left',padx=(0,10))
         text=ttk.Frame(card);text.pack(side='left',fill='x',expand=True)
         self.headline=tk.StringVar(value='...');self.sub=tk.StringVar(value='')
-        ttk.Label(text,textvariable=self.headline,font=('Segoe UI',11,'bold'),wraplength=190).pack(anchor='w')
+        ttk.Label(text,textvariable=self.headline,font=('Segoe UI',11,'bold'),wraplength=190,justify='center').pack(fill='x')  # centered status text
         ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=190).pack(anchor='w')
-        buttons=ttk.Frame(text);buttons.pack(anchor='w',pady=(8,0))  # under the status text
+        buttons=ttk.Frame(root)  # Stop and Launch Game: packed above the footer rows below
         self.toggle_button=ttk.Button(buttons,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='left')
         self.launch_button=ttk.Button(buttons,text='Launch Game',command=self.launch_game);self.launch_button.pack(side='left',padx=(6,0))  # same row as Stop
         shown=ttk.LabelFrame(root,text='Stats on this build')  # kept but not shown: stats are applied in the background
         self.stats_box=ttk.Frame(shown,padding=(8,4));self.stats_box.pack(fill='x')
         foot=ttk.Frame(root);foot.pack(side='bottom',fill='x',padx=12,pady=(0,10))
+        buttons.pack(in_=foot,side='top',fill='x',pady=(0,6))
         row=ttk.Frame(foot);row.pack(fill='x',pady=(0,6))
         ttk.Button(row,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
         ttk.Button(row,text='Settings',command=self.open_settings).pack(side='left',padx=(0,6))
         ttk.Button(row,text='GitHub',command=self.open_github).pack(side='left')
         row2=ttk.Frame(foot);row2.pack(fill='x')
         ttk.Label(row2,text='Solo or host only',foreground='#b26a00').pack(side='left')
+        ttk.Label(row2,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right',padx=(8,0))  # version on the right edge
         self.foot=tk.StringVar()
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')

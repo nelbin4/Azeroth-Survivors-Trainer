@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.6 (experimental)
+
+- Window: compact 320 x 220, fixed size. Stop and Launch Game sit above Talents, Settings and GitHub; the status text is centred; the version shows on the right of the footer.
+- Launch Game is greyed out while the game is running.
+
 ## 2.0.5 (experimental)
 
 - Smaller download: the exe no longer bundles Frida (about 84 MB down to about 43 MB). The watcher doesn't use Frida; the old manual hook commands need Frida installed separately.
