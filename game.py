@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.7'
+VERSION = '2.0.8'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -3192,11 +3192,12 @@ class WatcherWindow:
         second=ttk.Frame(body);second.pack(fill='x',pady=(0,4))
         ttk.Label(second,text='Max talents for').pack(side='left')
         names=['All classes']+[CLASS_NAMES[c] for c in CLASS_ORDER]
-        self.class_choice=ttk.Combobox(second,values=names,state='readonly',width=14);self.class_choice.set(read().get('max_talent_class','All classes'))
+        self.class_choice=ttk.Combobox(second,values=names,state='readonly',width=12);self.class_choice.set(read().get('max_talent_class','All classes'))
         if self.class_choice.get() not in names:self.class_choice.set('All classes')
         self.class_choice.pack(side='left',padx=6)
-        ttk.Button(second,text='Create save',command=self.max_talents_create).pack(side='left')
-        ttk.Button(second,text='Open Saves folder',command=self.open_saves).pack(side='left',padx=6)
+        third=ttk.Frame(body);third.pack(fill='x',pady=(0,4))
+        ttk.Button(third,text='Create save',command=self.max_talents_create).pack(side='left',expand=True,fill='x')
+        ttk.Button(third,text='Open Saves folder',command=self.open_saves).pack(side='left',expand=True,fill='x',padx=(6,0))
         self.save_status=tk.StringVar(value='')
     def open_settings(self):
         self.show_panel('settings')
@@ -3213,11 +3214,15 @@ class WatcherWindow:
         if name=='talents':self.build_talents(body)
         else:self.build_settings_panel(body)
         self.panel_name=name
-        self.root.geometry('320x500')
+        self.fit_height()
+    def fit_height(self):
+        """Fixed 320 pixels wide; as tall as the content needs, never shorter than the compact window."""
+        self.root.update_idletasks()
+        self.root.geometry(f'320x{max(220,self.root.winfo_reqheight())}')
     def close_panel(self):
         if getattr(self,'panel',None) is not None:self.panel.destroy()
         self.panel=None;self.panel_name=None;self.log=None;self.field_vars={};self.live_vars={};self.row_widgets={}
-        self.root.geometry('320x220')
+        self.fit_height()
     def build_settings_panel(self,body):
         ttk=self.ttk
         notebook=ttk.Notebook(body);notebook.pack(fill='both',expand=True)
@@ -3263,16 +3268,16 @@ class WatcherWindow:
         for row,(name,offset,fmt,value) in enumerate(data['config']['targets'],start=1):
             var=self.tk.BooleanVar(value=name not in disabled);self.field_vars[name]=var
             check=ttk.Checkbutton(self.rows,variable=var,command=self.save_fields);check.grid(row=row,column=0)
-            ttk.Label(self.rows,text=name,width=16).grid(row=row,column=1,sticky='w',padx=6)
+            ttk.Label(self.rows,text=name,width=12).grid(row=row,column=1,sticky='w',padx=3)
             live=self.tk.StringVar(value='-');self.live_vars[name]=live
-            ttk.Label(self.rows,textvariable=live,width=14).grid(row=row,column=2,sticky='w',padx=6)
+            ttk.Label(self.rows,textvariable=live,width=9).grid(row=row,column=2,sticky='w',padx=3)
             target=self.tk.StringVar(value=f'{value:g}')
-            entry=ttk.Entry(self.rows,textvariable=target,width=11,state='disabled' if offset==20 else 'normal');entry.grid(row=row,column=3,sticky='w',padx=6)
+            entry=ttk.Entry(self.rows,textvariable=target,width=8,state='disabled' if offset==20 else 'normal');entry.grid(row=row,column=3,sticky='w',padx=3)
             for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e,n=name,o=offset,f=fmt,v=target:self.commit_target(n,o,f,v))
             self.row_widgets[name]=(check,entry,offset)
     def build_stats(self,body):
         tk=self.tk;ttk=self.ttk
-        canvas=tk.Canvas(body,highlightthickness=0,height=230,width=470);bar=ttk.Scrollbar(body,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
+        canvas=tk.Canvas(body,highlightthickness=0,height=150,width=260);bar=ttk.Scrollbar(body,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
         bar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
         self.rows=ttk.Frame(canvas);canvas.create_window((0,0),window=self.rows,anchor='nw')
         self.rows.bind('<Configure>',lambda e:canvas.configure(scrollregion=canvas.bbox('all')))
@@ -3282,7 +3287,7 @@ class WatcherWindow:
     def build_settings(self,body):
         ttk=self.ttk;tk=self.tk
         self.updates=tk.BooleanVar(value=read().get('auto_update',True))
-        ttk.Checkbutton(body,text=f'Check GitHub for updates at startup (version {VERSION})',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w')
+        ttk.Checkbutton(body,text='Check for updates at startup',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w')
     def locate_game(self):
         from tkinter import filedialog
         path=filedialog.askopenfilename(parent=self.root,title='Select AzerothSurvivors.exe (the game you downloaded)',filetypes=[('Game executable','AzerothSurvivors.exe'),('Executable','*.exe')])

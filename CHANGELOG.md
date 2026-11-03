@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.8 (experimental)
+
+- Talents and Settings fit inside the 320-pixel window. The window height fits the open page and shrinks back when closed.
+- Fixed: Open Saves folder button was cut off in the Talents page.
+
 ## 2.0.7 (experimental)
 
 - Talents and Settings open inside the window, with a Back button. The window grows while a panel is open.
