@@ -24,7 +24,7 @@ def main():
                '--noconsole', '--name', name,
                '--icon', str(ROOT / 'assets' / 'trainer-icon.ico'),
                '--distpath', str(ROOT / 'dist'), '--workpath', str(ROOT / 'build'), '--specpath', str(ROOT / 'build'),
-               '--collect-all', 'PyMemoryEditor', '--collect-all', 'frida',
+               '--collect-all', 'PyMemoryEditor',
                '--add-data', str(ROOT / 'profile.example.json') + ';.',
                '--add-data', str(ROOT / 'assets' / 'trainer-icon.ico') + ';assets', str(ROOT / 'launcher' / 'launcher.py')]
     subprocess.run(command, check=True)

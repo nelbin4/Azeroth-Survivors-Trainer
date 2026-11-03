@@ -10,7 +10,7 @@ from pathlib import Path
 import argparse, atexit, ctypes, ctypes.wintypes, difflib, hashlib, io, json, math, re, shutil, struct  # noqa: E401,F401
 import subprocess, tempfile, threading, time, unittest, urllib.request, uuid, zipfile  # noqa: E401,F401
 import tkinter, tkinter.filedialog, tkinter.messagebox, tkinter.simpledialog, tkinter.ttk  # noqa: E401,F401
-import numpy, psutil, PIL.Image, PIL.ImageOps, PyMemoryEditor, frida  # noqa: E401,F401
+import numpy, psutil, PIL.Image, PIL.ImageOps, PyMemoryEditor  # noqa: E401,F401  (frida is not bundled: only the old manual hook commands use it)
 
 
 def folder():

@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.0.5 (experimental)
+
+- Smaller download: the exe no longer bundles Frida (about 84 MB down to about 43 MB). The watcher doesn't use Frida; the old manual hook commands need Frida installed separately.
+
 ## 2.0.4 (experimental)
 
 - Logs: `trainer.log` records window messages, state changes, errors, record lock-on and each verified offset.
