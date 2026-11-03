@@ -3299,7 +3299,6 @@ class WatcherWindow:
         entry=ttk.Entry(cap,textvariable=self.talent_cap,width=6);entry.pack(side='left',padx=6)
         for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e:self.cap_changed())
         self.build_settings(general)
-        ttk.Button(general,text="What's new",command=self.whats_new).pack(anchor='w',pady=(10,0))
         self.build_stats(stats)
         self.build_log(log)
         self.log.configure(state='normal');self.log.insert('end',''.join(self.log_lines));self.log.see('end');self.log.configure(state='disabled')
@@ -3433,13 +3432,6 @@ class WatcherWindow:
                 if t[0]==name:t[3]=value
         update_session(save_it);var.set(f'{value:g}');self.say(f'{name} target set to {value:g}.')
         if auto_alive(read()):self.say('Restarting the watcher to use it...');self.start()
-    def whats_new(self):
-        from tkinter import messagebox
-        try:
-            text=(ROOT/'CHANGELOG.md').read_text(encoding='utf-8');parts=text.split('\n## ')
-            notes='## '+parts[1].strip() if len(parts)>1 else text
-        except OSError:notes=f'Release notes are on GitHub: https://github.com/{REPO}/releases'  # the release zip holds only the exe and game.py
-        messagebox.showinfo(f'{APP_NAME} {VERSION}',notes)
     def save_fields(self):
         off=sorted(n for n,v in self.field_vars.items() if not v.get())
         update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
