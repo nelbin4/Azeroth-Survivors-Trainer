@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.1.2 (experimental)
+
+- The Talents button is **Max Talents**, and its panel is titled the same.
+- "Raise talent cap to 150" is a button instead of a checkbox. It raises the cap now and at every game start. **Restore 51** puts the cap back and stops raising it at game start.
+- After the cap is raised, the status box says "Refresh page to see talent points increase." for one minute.
+
 ## 2.1.1 (experimental)
 
 - Settings is now a Log button. The General tab, the Stats tab and the Mode choice are removed; the watcher always writes.

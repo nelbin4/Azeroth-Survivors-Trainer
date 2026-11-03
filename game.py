@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.1.1'
+VERSION = '2.1.2'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -3224,7 +3224,7 @@ class WatcherWindow:
         self.toggle_button=ttk.Button(buttons,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='left')
         self.launch_button=ttk.Button(buttons,text='Launch Game',command=self.launch_game);self.launch_button.pack(side='left',padx=(6,0))
         row=ttk.Frame(foot);row.pack(pady=(0,6))  # centred
-        ttk.Button(row,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
+        ttk.Button(row,text='Max Talents',command=self.open_talents).pack(side='left',padx=(0,6))
         ttk.Button(row,text='Log',command=self.open_log).pack(side='left',padx=(0,6))
         ttk.Button(row,text='GitHub',command=self.open_github).pack(side='left')
         row2=ttk.Frame(foot);row2.pack(fill='x')
@@ -3264,7 +3264,8 @@ class WatcherWindow:
     def build_talents(self,body):
         tk=self.tk;ttk=self.ttk
         first=ttk.Frame(body);first.pack(fill='x',pady=(0,6))
-        self.cap_check=ttk.Checkbutton(first,text=f'Raise talent cap to {self.talent_cap.get()}',variable=self.talent_auto,command=self.talent_toggle);self.cap_check.pack(side='left')
+        self.cap_check=ttk.Button(first,text=f'Raise talent cap to {self.talent_cap.get()}',command=self.raise_talent_cap);self.cap_check.pack(side='left')
+        ttk.Button(first,text=f'Restore {TALENT_ORIGINAL}',command=self.talent_restore).pack(side='left',padx=(6,0))
         self.talent_status=tk.StringVar(value='')
         second=ttk.Frame(body);second.pack(fill='x',pady=(0,4))
         ttk.Label(second,text='Max talents for').pack(side='left')
@@ -3285,7 +3286,7 @@ class WatcherWindow:
         ttk=self.ttk
         self.panel=ttk.Frame(self.root,padding=(12,4));self.panel.pack(fill='both',expand=True,before=self.foot_frame)
         head=ttk.Frame(self.panel);head.pack(fill='x',pady=(0,6))
-        ttk.Label(head,text='Talents' if name=='talents' else 'Log',font=('Segoe UI',10,'bold')).pack(side='left')
+        ttk.Label(head,text='Max Talents' if name=='talents' else 'Log',font=('Segoe UI',10,'bold')).pack(side='left')
         ttk.Button(head,text='Back',command=self.close_panel).pack(side='right')
         body=ttk.Frame(self.panel);body.pack(fill='both',expand=True)
         if name=='talents':self.build_talents(body)
@@ -3303,10 +3304,16 @@ class WatcherWindow:
     def build_settings_panel(self,body):
         self.build_log(body)  # the log is the only page left in Settings
         self.log.configure(state='normal');self.log.insert('end',''.join(self.log_lines));self.log.see('end');self.log.configure(state='disabled')
-    def talent_toggle(self):
-        update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))
-        if self.talent_auto.get():self.talent_apply()
-        else:self.talent_restore()
+    def raise_talent_cap(self):
+        """Raise the cap now and again at every game start, so the button only has to be pressed once."""
+        self.talent_auto.set(True);update_session(lambda d:d.update(talent_auto=True))
+        self.talent_apply()
+    def talent_restore(self):
+        """Put the cap back to the game's own 51 now and stop raising it at game start."""
+        self.talent_auto.set(False);update_session(lambda d:d.update(talent_auto=False))
+        def work():
+            count=talents_apply(TALENT_ORIGINAL);self.root.after(0,lambda:self.say(f'Talent cap restored to {TALENT_ORIGINAL} ({count} spots).'))
+        self.run_task(work,'Restoring the talent cap...')
     def refresh_applied(self,names):
         if names==self.applied_shown:return
         self.applied_shown=list(names)
@@ -3380,12 +3387,12 @@ class WatcherWindow:
         except ValueError as error:self.say(str(error));return
         def work():
             count=talents_apply(cap)
-            update_session(lambda d:d.update(talent_cap=cap));self.root.after(0,lambda:self.say(f'Talent cap set to {cap} ({count} spots patched together).'))
+            update_session(lambda d:d.update(talent_cap=cap))
+            def done():
+                self.cap_note_until=time.monotonic()+60  # the status box asks for a page refresh for a minute
+                self.say(f'Talent cap set to {cap} ({count} spots patched together).')
+            self.root.after(0,done)
         self.run_task(work,'Applying the talent cap (the game pauses for a few milliseconds)...')
-    def talent_restore(self):
-        def work():
-            count=talents_apply(TALENT_ORIGINAL);self.root.after(0,lambda:self.say(f'Talent cap restored to {TALENT_ORIGINAL} ({count} spots).'))
-        self.run_task(work,'Restoring the talent cap...')
     def say(self,text):
         trainer_log('gui '+text)
         line=time.strftime('%H:%M:%S  ')+text+'\n';self.log_lines=(self.log_lines+[line])[-200:]
@@ -3442,6 +3449,7 @@ class WatcherWindow:
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.headline.set(STATE_TITLES.get(state,state.replace('_',' ').capitalize()));self.dot.itemconfigure(self.dot_id,fill=self.COLORS.get(state,'#6b6b6b'))
             self.sub.set(monitor.get('status') if alive and monitor.get('status') else '' if alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
+            if time.monotonic()<getattr(self,'cap_note_until',0):self.sub.set('Refresh page to see talent points increase.')
             text_now=(self.headline.get(),self.sub.get())
             if text_now!=getattr(self,'last_status_text',None):self.last_status_text=text_now;self.fit_height()  # long status text: grow the window so the footer stays visible
             self.toggle_button.configure(text='Stop' if alive else 'Start')
