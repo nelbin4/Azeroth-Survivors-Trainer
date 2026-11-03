@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.10 (experimental)
+
+- The window checks for updates in the background, so a slow GitHub check no longer delays the window. The silent watcher still checks before it starts.
+- The talent status is read in the background, so the window never waits on the game's memory.
+- The session backup archive rotates to a dated file past 5 MB. Nothing is deleted.
+- Self-tests added for the archive rotation and the talent read (69 tests).
+- Not done: some low-priority audit items remain.
+
 ## 2.0.9 (experimental)
 
 - Fix: stale stat candidates are dropped on failed reads, after a minute without a lock, on a new run and when the game process is lost.
