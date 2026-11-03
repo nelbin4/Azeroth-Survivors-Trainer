@@ -1065,6 +1065,8 @@ def mutex(suffix, timeout=10000):
         if acquired: api.ReleaseMutex(handle)
         api.CloseHandle(handle)
 
+ARCHIVE_ROTATE_BYTES = 5 * 1024 * 1024
+
 def update_session(change):
     with mutex('session'):
         data = read()
@@ -1073,6 +1075,9 @@ def update_session(change):
         if backups and len(backups) > 64:
             # Keep the hot file small; removed entries are appended to an archive, never discarded.
             archive = SESSION.with_name('session.backups-archive.json')
+            if archive.exists() and archive.stat().st_size > ARCHIVE_ROTATE_BYTES:
+                # Full archive: keep it as a dated file and start a new one, so each read and write stays small.
+                archive.replace(archive.with_name(f"session.backups-archive-{time.strftime('%Y%m%d-%H%M%S')}.json"))
             old = json.loads(archive.read_text(encoding='utf-8')) if archive.exists() else []
             archive.write_text(json.dumps(old + backups[:-64]), encoding='utf-8')
             data['run_backups'] = backups[-64:]
@@ -3228,8 +3233,14 @@ class WatcherWindow:
         if notice:
             self.say(notice);update_session(lambda d:d.pop('update_notice',None))
         self.refresh()
+        threading.Thread(target=self.check_update,daemon=True).start()  # the window is already up; a slow GitHub check never delays it
         if not configured():root.after(400,self.locate_game)  # first run: the window is up, now ask where the game is
         elif not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
+    def check_update(self):
+        if auto_update():self.update_ready=True  # refresh() restarts on the window thread
+    def read_talents(self,data):
+        try:self.talent_text=self.describe_talents(data)
+        finally:self.talent_reading=False
     def open_github(self):
         import webbrowser
         webbrowser.open(f'https://github.com/{REPO}')
@@ -3489,6 +3500,7 @@ class WatcherWindow:
         return self.running_cache
     def refresh(self):
         try:
+            if getattr(self,'update_ready',False):restart_after_update()
             if not configured():
                 self.alive=False;self.headline.set('Game not set up yet');self.sub.set('Locate AzerothSurvivors.exe to begin.')
                 self.dot.itemconfigure(self.dot_id,fill='#b26a00');self.toggle_button.configure(text='Locate game',width=12)
@@ -3502,8 +3514,10 @@ class WatcherWindow:
             text_now=(self.headline.get(),self.sub.get())
             if text_now!=getattr(self,'last_status_text',None):self.last_status_text=text_now;self.fit_height()  # long status text: grow the window so the footer stays visible
             self.toggle_button.configure(text='Stop' if alive else 'Start')
-            if not self.busy and time.monotonic()>=getattr(self,'talent_next',0):
-                self.talent_next=time.monotonic()+4;self.talent_status.set(self.describe_talents(data))
+            if getattr(self,'talent_text',None):self.talent_status.set(self.talent_text)  # filled in by read_talents off the window thread
+            if not self.busy and not getattr(self,'talent_reading',False) and time.monotonic()>=getattr(self,'talent_next',0):
+                self.talent_next=time.monotonic()+4;self.talent_reading=True
+                threading.Thread(target=self.read_talents,args=(data,),daemon=True).start()
             if state!=self.last_state:self.say('State: '+state+(f" ({monitor.get('reason')})" if monitor.get('reason') else ''));self.last_state=state
             try:values=self.live_values(monitor) if alive else {}
             except Exception:values={}
@@ -4148,6 +4162,54 @@ def self_test():
                     self.assertEqual(read()['native_identity_recipe']['name'], '<auto>')
                 finally:
                     SESSION = old
+        def test_full_backup_archive_rotates(self):
+            import tempfile
+            global SESSION
+            old = SESSION
+            with tempfile.TemporaryDirectory() as folder:
+                SESSION = Path(folder) / 'session.json'
+                archive = SESSION.with_name('session.backups-archive.json')
+                try:
+                    archive.write_text(json.dumps(['x' * ARCHIVE_ROTATE_BYTES]), encoding='utf-8')
+                    save({'run_backups': [{'n': i} for i in range(70)]})
+                    update_session(lambda d: None)
+                    self.assertEqual(len(read()['run_backups']), 64)
+                    self.assertEqual(len(json.loads(archive.read_text(encoding='utf-8'))), 6)
+                    dated = [p for p in Path(folder).glob('session.backups-archive-*.json')]
+                    self.assertEqual(len(dated), 1)
+                    self.assertEqual(len(json.loads(dated[0].read_text(encoding='utf-8'))), 1)
+                finally:
+                    SESSION = old
+        def test_small_backup_archive_is_appended(self):
+            import tempfile
+            global SESSION
+            old = SESSION
+            with tempfile.TemporaryDirectory() as folder:
+                SESSION = Path(folder) / 'session.json'
+                archive = SESSION.with_name('session.backups-archive.json')
+                try:
+                    archive.write_text(json.dumps([{'n': -1}]), encoding='utf-8')
+                    save({'run_backups': [{'n': i} for i in range(65)]})
+                    update_session(lambda d: None)
+                    self.assertEqual(len(json.loads(archive.read_text(encoding='utf-8'))), 2)
+                    self.assertFalse(list(Path(folder).glob('session.backups-archive-*.json')))
+                finally:
+                    SESSION = old
+        def test_talent_read_reports_back_and_clears_flag(self):
+            class Window:
+                talent_reading = True
+                def describe_talents(self, data): return 'Cap raised to 150.'
+            window = Window()
+            WatcherWindow.read_talents(window, {})
+            self.assertEqual(window.talent_text, 'Cap raised to 150.')
+            self.assertFalse(window.talent_reading)
+        def test_talent_read_failure_clears_flag(self):
+            class Window:
+                talent_reading = True
+                def describe_talents(self, data): raise RuntimeError('gone')
+            window = Window()
+            with self.assertRaises(RuntimeError):WatcherWindow.read_talents(window, {})
+            self.assertFalse(window.talent_reading)
         def test_record(self):
             class Process:
                 pid = 1
@@ -4190,8 +4252,8 @@ if __name__ == '__main__':
     command = sys.argv[1]
     if '--no-update' in sys.argv:sys.argv.remove('--no-update');os.environ['AZEROTH_UPDATED']='1'
     try:
-        if command=='gui' or (command=='auto' and '--background' in sys.argv):
-            if auto_update():restart_after_update()
+        if command=='auto' and '--background' in sys.argv:
+            if auto_update():restart_after_update()  # the silent watcher has no window, so it checks before it starts watching
         if command not in ('setup','self-test','version','--version','--help','-h','help','gui','hook-current','hook-stop'):ensure_configured()
         if command in ('start','_worker','named-core','_named_core','source-apply','lifesteal-test','apply-once','apply-host','capture','numeric-watch','text-watch','inspect-copy','observe-swaps','discover') and auto_alive(read()):
             raise RuntimeError('Automatic watcher is active. Stop it before running a competing writer or debugger.')
