@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.10 (experimental)
+## 2.1.0 (experimental)
 
 - The window checks for updates in the background, so a slow GitHub check no longer delays the window. The silent watcher still checks before it starts.
 - The talent status is read in the background, so the window never waits on the game's memory.

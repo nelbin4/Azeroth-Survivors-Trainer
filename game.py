@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.10'
+VERSION = '2.1.0'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -3438,7 +3438,7 @@ class WatcherWindow:
         try:
             text=(ROOT/'CHANGELOG.md').read_text(encoding='utf-8');parts=text.split('\n## ')
             notes='## '+parts[1].strip() if len(parts)>1 else text
-        except OSError:notes='No changelog found.'
+        except OSError:notes=f'Release notes are on GitHub: https://github.com/{REPO}/releases'  # the release zip holds only the exe and game.py
         messagebox.showinfo(f'{APP_NAME} {VERSION}',notes)
     def save_fields(self):
         off=sorted(n for n,v in self.field_vars.items() if not v.get())
