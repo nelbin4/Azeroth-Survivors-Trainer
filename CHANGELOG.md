@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.0.9 (experimental)
+
+- Fix: stale stat candidates are dropped on failed reads, after a minute without a lock, on a new run and when the game process is lost.
+- Fix: the screen capture used to read the stat boxes is deleted right after it is read. README describes when the trainer reads the screen.
+- Fix: Area is no longer checked twice once its offset is saved.
+- Fix: changing the talent cap works when the Talents page is closed; the window refresh no longer stops early when the Talents page was never opened; refresh errors are logged once.
+- Auto talent cap on game start retries three times and logs each failure.
+- Button requests made while a task runs are queued instead of dropped; the talent cap value is read on the window thread.
+- The window grows to fit long status text, so the footer stays visible.
+- Game executable hash is cached per file version.
+- session.json: a corrupt file is kept as a dated backup and reset; the setup write uses the same lock as the watcher.
+- The window and the watcher share one rule set for target values (Max Health, Haste, Current Health).
+- Updater: the git path reports the real installed version; the version check gives up after 4 seconds.
+- Profile example: developer data removed, default name is `<auto>`. The changelog ships in the zip so What's new works for the exe.
+- Tests use a neutral character name ('Hero') instead of the author's name.
+- Not done from the audit: the update check still runs on the startup path; the session archive has no size cap; the desktop-side talent status is still computed on the window thread; some low-priority items remain.
+- Dead code kept on purpose, because tests still use it: the learning path, `learn_deltas`, `core_live`, `ensure_hook`, `attach_hook`, `KNOWN_LAYOUTS`.
+
 ## 2.0.8 (experimental)
 
 - Talents and Settings fit inside the 320-pixel window. The window height fits the open page and shrinks back when closed.
@@ -79,7 +97,7 @@
 - Update only `game.py` from GitHub after validating it; keep a backup of the previous version.
 - A launcher rebuild is still needed when its Python runtime or bundled dependencies change.
 
-# 1.9.4 (experimental)
+## 1.9.4 (experimental)
 
 - Disable the unsafe candidate-write probe used by automatic pattern discovery. This may leave some runs without an automatic match.
 - Add an explicit, build-checked Damage and Area recalculation hook for a manually verified record. New runs require rediscovery.

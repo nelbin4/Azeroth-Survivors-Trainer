@@ -150,32 +150,6 @@
     "build": "DE7147A2A3A01B4FB84F3A7F036BC940F9E7D4FDFC42A7FDB79F3F1B2BD798BE",
     "name_header_offset": 432,
     "stats_offset": 1224,
-    "name": "<set with: python game.py setup>"
-  },
-  "learned_builds": {
-    "8829953418a4d996cc5287f0e9fad25407ca30ceb64d105a4f57833caef78016": {
-      "delta": 792,
-      "owner_offset": 1040,
-      "skip_offsets": [
-        120
-      ],
-      "learned": 1793337866.1752172,
-      "samples": 3,
-      "level": 1,
-      "field_offsets": {
-        "Area": 40,
-        "Armor": 32,
-        "Crit": 12,
-        "Crit Damage": 16,
-        "Damage": 4,
-        "Echo": 56,
-        "Pickup": 24,
-        "Regeneration": 36,
-        "Speed": 20
-      },
-      "wallet_offset": 124,
-      "wallet_confirmed": true,
-      "wallet_evidence": "user-reported 125, ~30, 400+ matched monotonic +124 log; +904 mirrors it"
-    }
+    "name": "<auto>"
   }
 }

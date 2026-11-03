@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.8'
+VERSION = '2.0.9'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -441,7 +441,8 @@ class AutoBackend:
             if off==20 and value!=1.5:raise AutoBlocked('Speed must stay at +50%.')
             if off==28 and not 1<=value<=1e6:raise AutoBlocked('Experience multiplier must be between 1 and 1,000,000.')
         desired={off:value for _,off,_,value in targets}
-        if desired[0]<1 or desired[112]>desired[0] or desired[8]<=0:raise AutoBlocked('Invalid target health or cooldown relationship.')
+        problem=target_relations_problem(desired)
+        if problem:raise AutoBlocked(problem)
         self.targets=targets;self.recipe['targets']=targets;self.hash_cache={}
         self.hints={data['config']['base']};self.injected=set();self.regions=[];self.region_index=0;self.offset=0
         self.scan_found={};self.scan_errors=0;self.scan_bytes=0;self.scan_complete=False;self.scan_restart=0;self.last_hint=0
@@ -474,7 +475,7 @@ class AutoBackend:
         self.build=digest;self.learn_headers=None;self.learn_samples=[]
         self.hints.update(int(h['base']) for h in read().get('auto_hints',[]) if h.get('build','').lower()==digest and h.get('name')==self.name)
         if digest==self.data['game_sha256'].lower():
-            self.set_layout(None);self.learning=False;return
+            self.set_layout(None);self.learning=False;self.core=False;return
         learned=read().get('learned_builds',{}).get(digest) or KNOWN_LAYOUTS.get(digest)
         if learned and 'delta' in learned:
             self.set_layout(learned);self.core=False
@@ -651,6 +652,7 @@ class AutoBackend:
         if self.core_base:
             try:return [self.core_candidate(self.core_base)]
             except Exception:self.core_base=None
+        if self.core_pending and now-getattr(self,'core_pending_since',now)>60:self.core_pending=[];self.core_snap=None  # stale: rescan
         if self.core_pending:  # keep watching the same copies; a rescan would restart the 10-second comparison
             live=self.core_watch([b for b,_ in self.core_pending])
             if live:return self.core_found(live)
@@ -667,12 +669,13 @@ class AutoBackend:
         else:self.core_empty=None
         # Only records with a plausible level and a text header can be the player's; the rest are other data that happens to match the stat pattern.
         found=[(b,d) for b,d in found if 1<=struct.unpack('<I',self.memory.read_bytes(b-104,4))[0]<=10000 and core_header_hits(self.memory,b)]
-        self.core_pending=found;self.core_snap=None
+        self.core_pending=found;self.core_snap=None;self.core_pending_since=now
         return []
     def core_watch(self,bases):
         """Read-only: the live copy is the one whose stats move during play; stale copies stay still.
         Compares against a snapshot taken 10 s earlier, since the live stats change only every few seconds."""
-        snap={b:self.memory.read_bytes(b,32) for b in bases}
+        try:snap={b:self.memory.read_bytes(b,32) for b in bases}
+        except Exception:self.core_pending=[];self.core_snap=None;return []  # the copies are gone or moved: rescan
         started,before=self.core_snap or (time.monotonic(),None)
         if time.monotonic()-started<10:
             self.core_snap=(started,before) if before is not None else (started,snap)
@@ -739,7 +742,7 @@ class AutoBackend:
         for name in ('Area','Luck','Gold Bonus'):
             offset=CORE_FIELDS.get(self.build,{}).get(name)
             if offset is None and name=='Area' and self.area_offset is None:self.verify_area(base)
-            if offset is None and name in self.VERIFY_SOURCE:offset=self.verify_field(base,name)
+            if offset is None and name in self.VERIFY_SOURCE and not (name=='Area' and self.area_offset is not None):offset=self.verify_field(base,name)  # Area already verified: do not check it twice
             if offset is None and name=='Area':offset=self.area_offset
             if offset is not None:fields[name]=offset
         fields={name:fields[name] for name in CORE_PRIORITY if name in fields}
@@ -824,6 +827,7 @@ class AutoBackend:
         return found or (self.detect_character(now) if self.scan_complete else [])
     def run_reset(self):
         self.injected.clear();self.backed_up.clear()
+        self.core_pending=[];self.core_snap=None  # a new run: candidates found before are not trusted
     def apply(self,candidate):
         if self.core:return self.core_apply(candidate)
         result=self.apply_once(candidate)
@@ -878,6 +882,7 @@ class AutoRecovery:
         self.last_progress=0;self.run=0;self.total_writes=0;self.state=dict(state='waiting_process')
     def forget(self):
         if hasattr(self.backend,'release_name'):self.backend.release_name()
+        if hasattr(self.backend,'core_pending'):self.backend.core_pending=[];self.backend.core_snap=None;self.backend.core_base=None
         self.candidate=None;self.last_level=None;self.baseline=None;self.confirmations=0;self.active=False;self.failures=0;self.last_values={};self.low=0;self.dup_key=None;self.dup={}
     def pick_live(self,candidates):
         """Copies of one record: only the live one changes (HP, level, gold). Pick it once exactly one moves."""
@@ -975,7 +980,7 @@ def prepare_auto_launch(args):
                 if args.trace_only:argv.append('--trace-only')
                 child=subprocess.Popen(argv,cwd=ROOT,env=child_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,creationflags=subprocess.DETACHED_PROCESS|subprocess.CREATE_NEW_PROCESS_GROUP|subprocess.CREATE_NO_WINDOW)  # own process group: a Ctrl+C aimed at the launching console must not stop the watcher
-                update_session(lambda current:current.update(auto_monitor=dict(pid=child.pid,created=psutil.Process(child.pid).create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only)))
+                update_session(lambda current:current.update(auto_monitor=dict(pid=child.pid,created=child_created_time(child.pid),state='starting',heartbeat=time.time(),trace_only=args.trace_only)))
                 print(f'Automatic non-pausing watcher started: PID {child.pid}. It waits for gameplay progression and reacquires new runs/processes. Stop: python game.py stop.')
                 return True
             update_session(lambda current:current.update(auto_monitor=dict(pid=os.getpid(),created=psutil.Process().create_time(),state='starting',heartbeat=time.time(),trace_only=args.trace_only)))
@@ -1004,9 +1009,13 @@ def auto_command():
                 if engine.generation and engine.generation!=talents_done[0] and not args.trace_only and state.get('state') not in ('waiting_process','starting'):
                     talents_done[0]=engine.generation
                     if read().get('talent_auto',False):
-                        def talents_job():
-                            try:talents_apply(read().get('talent_cap',TALENT_DEFAULT_CAP))
-                            except Exception:pass
+                        cap=read().get('talent_cap',TALENT_DEFAULT_CAP)
+                        def talents_job(generation=engine.generation,cap=cap):
+                            for attempt in range(3):  # the game may still be loading; retry before giving up
+                                try:talents_apply(cap);return
+                                except Exception as error:
+                                    trainer_log(f'talent cap attempt {attempt+1} failed: {error!r}');time.sleep(5)
+                            if talents_done[0]==generation:talents_done[0]=None  # let the next step try again
                         threading.Thread(target=talents_job,daemon=True).start()
                 if state.get('state')!=last_state:
                     print(json.dumps(state),flush=True);trainer_log('state '+json.dumps(state));last_state=state.get('state')
@@ -1099,7 +1108,17 @@ def write_batch(memory, changes, guard):
         raise RuntimeError(f'Write stopped: {error}; conditionally restored {restored}/{len(written)} fields.') from error
 
 def read():
-    return json.loads(SESSION.read_text(encoding='utf-8'))
+    """Read session.json. A corrupt file is kept as a dated backup and replaced by a fresh copy of the example profile."""
+    try:return json.loads(SESSION.read_text(encoding='utf-8'))
+    except (OSError,ValueError) as error:
+        if not SESSION.exists():raise
+        backup=SESSION.with_name(f'session.corrupt-{time.strftime("%Y%m%d-%H%M%S")}.json')
+        try:SESSION.replace(backup)
+        except OSError:pass
+        trainer_log(f'session.json was unreadable ({error!r}); kept as {backup.name} and reset')
+        example=RESOURCE_ROOT/'profile.example.json'
+        data=json.loads(example.read_text(encoding='utf-8'));data.pop('game_exe',None)
+        save(data);return data
 
 def save(data):
     temporary = SESSION.with_name(f'session.{os.getpid()}.tmp')
@@ -2216,7 +2235,7 @@ def named_core():
         child=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'_named_core','--seconds',str(args.seconds)],
             cwd=ROOT,env=child_env(),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW)
-        update_session(lambda current:current.update(named_monitor=dict(pid=child.pid,created=psutil.Process(child.pid).create_time(),state='starting')))
+        update_session(lambda current:current.update(named_monitor=dict(pid=child.pid,created=child_created_time(child.pid),state='starting')))
         print(f'Non-pausing name-guarded updater started: PID {child.pid}. Stop with python game.py stop.')
         return
     if sys.argv[1]!='_named_core':update_session(lambda current:current.update(stop_requested=False))
@@ -2590,6 +2609,8 @@ def read_sheet_percents(pid,names=('Damage','Area')):
     if not handle:return {}
     path=shot_path('panel');capture_window(handle,path)
     whole=Image.open(path).convert('RGB').copy()  # load first: the OCR step removes the capture file
+    try:path.unlink() if isinstance(path,Path) else os.remove(path)
+    except OSError:pass  # never keep a screenshot of the game on disk
     keys={'Damage':'damage','Area':'area','Luck':'luck','Gold':'gold'}
     found={}
     for index,(fx1,fy1,fx2,fy2) in enumerate(PANEL_REGIONS):
@@ -2618,10 +2639,17 @@ def find_stat_offsets(memory,base,percent,span=(0,256),expected_value=None):
         if abs(value-expected)<=max(0.005,expected*0.002):hits.append(span[0]+off)
     return hits
 
+def child_created_time(pid):
+    """Start time of a child process; 0 when it already exited, so the caller does not crash."""
+    try:return psutil.Process(pid).create_time()
+    except psutil.Error:return 0.0
+
 def trainer_log(message):
     """Append one timestamped line to trainer.log next to the program. Never raises: logging must not stop the watcher."""
     try:
-        with (ROOT/'trainer.log').open('a',encoding='utf-8') as log:log.write(time.strftime('%Y-%m-%d %H:%M:%S  ')+str(message)+chr(10))
+        log_path=ROOT/'trainer.log'
+        if log_path.exists() and log_path.stat().st_size>1048576:log_path.replace(ROOT/'trainer.log.1')  # keep one old copy, start fresh
+        with log_path.open('a',encoding='utf-8') as log:log.write(time.strftime('%Y-%m-%d %H:%M:%S  ')+str(message)+chr(10))
     except OSError:pass
 
 def write_discovery_report(pid,hits,build):
@@ -2661,6 +2689,16 @@ def child_env(**extra):
 
 def parse_version(text):
     return tuple(int(part) for part in text.strip().split('.'))
+
+_EXE_DIGESTS = {}
+
+def exe_digest(path):
+    """SHA-256 of the game executable, cached per path, size and modified time so the big file is not re-read."""
+    path=Path(path);stat=path.stat();key=(str(path).lower(),stat.st_size,stat.st_mtime_ns)
+    if key not in _EXE_DIGESTS:
+        _EXE_DIGESTS.clear()
+        with path.open('rb') as stream:_EXE_DIGESTS[key]=hashlib.file_digest(stream,'sha256').hexdigest().lower()
+    return _EXE_DIGESTS[key]
 
 def http_get(url,limit,timeout):
     """HTTPS only, size-capped."""
@@ -2714,15 +2752,18 @@ def apply_update_source(data,target,current):
 def update_from_zip(target=None):
     """Fetch only the source file used by the launcher."""
     url=f'https://raw.githubusercontent.com/{REPO}/main/game.py'
-    return apply_update_source(http_get(url,4000000,6),target or ROOT,VERSION)
+    return apply_update_source(http_get(url,4000000,4),target or ROOT,VERSION)
 
 def update_from_git():
     """Developer checkout: only a clean fast-forward; local work is never touched."""
+    import re
     def git(*args):return subprocess.run(['git','-C',str(ROOT),*args],capture_output=True,text=True,timeout=30,creationflags=subprocess.CREATE_NO_WINDOW)
     if git('fetch','--quiet','origin','main').returncode:return None
     behind=git('merge-base','--is-ancestor','HEAD','origin/main').returncode==0 and git('rev-parse','HEAD').stdout!=git('rev-parse','origin/main').stdout
     if not behind or git('status','--porcelain','--untracked-files=no').stdout.strip():return None
-    return 'latest' if git('merge','--ff-only','origin/main').returncode==0 else None
+    if git('merge','--ff-only','origin/main').returncode!=0:return None
+    found=re.search(r"^VERSION = '([\d.]+)'",git('show','origin/main:game.py').stdout,re.M)
+    return found.group(1) if found else None
 
 def auto_update():
     """At startup: fetch the latest release from GitHub. True means files were replaced and the caller should restart."""
@@ -3050,13 +3091,15 @@ def configure(game_exe,name):
     if not exe.is_file():raise RuntimeError(f'Game executable not found: {exe}')
     name=(name or '').strip() or '<auto>'
     if len(name.encode('utf-8'))>64:raise ValueError('Character name must be at most 64 bytes.')
-    if SESSION.exists():data=read()
-    else:
-        example=RESOURCE_ROOT/'profile.example.json'
-        if not example.exists():raise RuntimeError('profile.example.json is missing; re-download the project.')
-        data=json.loads(example.read_text(encoding='utf-8'))
-    data['game_exe']=str(exe);data.setdefault('native_identity_recipe',{})['name']=name
-    data.pop('last_name',None);save(data);return data
+    with mutex('session',10000):  # read-modify-write under the same lock the watcher uses
+        if SESSION.exists():data=read()
+        else:
+            example=RESOURCE_ROOT/'profile.example.json'
+            if not example.exists():raise RuntimeError('profile.example.json is missing; re-download the project.')
+            data=json.loads(example.read_text(encoding='utf-8'))
+        data['game_exe']=str(exe);data.setdefault('native_identity_recipe',{})['name']=name
+        data.pop('last_name',None);save(data)
+    return data
 
 def seed_session():
     """Create session.json from the example profile with no game path yet (the window asks for it)."""
@@ -3126,6 +3169,13 @@ STATE_TITLES = {'starting': 'Starting up', 'waiting_process': 'Waiting for the g
                 'learning': 'Learning this game version', 'learned': 'Learned this game version', 'recovering': 'Reconnecting',
                 'blocked_ambiguous': 'Which character is yours?', 'blocked': 'Blocked', 'failed': 'Stopped by a problem', 'expired': 'Timed out', 'stopped': 'Stopped'}
 
+def target_relations_problem(desired):
+    """One rule set for the window and the watcher: desired maps field offset to value. Returns a message, or None when fine."""
+    if desired.get(0,1)<1:return 'Max Health must be at least 1.'
+    if desired.get(112,0)>desired.get(0,1):return 'Current Health cannot be above Max Health.'
+    if desired.get(8,1)<=0:return 'Haste must be above 0.'
+    return None
+
 def parse_target(text,offset,fmt):
     """Validate a target typed in the window. Raises ValueError for anything the watcher would refuse."""
     value=float(str(text).replace(',','').strip())
@@ -3146,6 +3196,7 @@ class WatcherWindow:
         self.tk=tk;self.ttk=ttk;self.root=root;self.last_state=None;self.digest=None;self.memory=None;self.mem_pid=None;self.busy=False;self.alive=False
         root.title(APP_NAME);root.geometry('320x220');root.resizable(False,False)  # compact, fixed size
         self.log=None;self.log_lines=[];self.applied_shown=None;self.applied_vars={}
+        self.talent_status=tk.StringVar(value='');self.save_status=tk.StringVar(value='')  # exist before any panel is opened
         self.mode=tk.StringVar(value='write')
         self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
         self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
@@ -3221,7 +3272,7 @@ class WatcherWindow:
         self.root.geometry(f'320x{max(220,self.root.winfo_reqheight())}')
     def close_panel(self):
         if getattr(self,'panel',None) is not None:self.panel.destroy()
-        self.panel=None;self.panel_name=None;self.log=None;self.field_vars={};self.live_vars={};self.row_widgets={}
+        self.panel=None;self.panel_name=None;self.log=None;self.field_vars={};self.live_vars={};self.row_widgets={};self.cap_check=None
         self.fit_height()
     def build_settings_panel(self,body):
         ttk=self.ttk
@@ -3246,7 +3297,9 @@ class WatcherWindow:
         except ValueError as error:
             self.say(str(error));self.talent_cap.set(str(read().get('talent_cap',TALENT_DEFAULT_CAP)));return
         if cap==read().get('talent_cap',TALENT_DEFAULT_CAP):return
-        update_session(lambda d:d.update(talent_cap=cap));self.cap_check.configure(text=f'Raise talent cap to {cap}')
+        update_session(lambda d:d.update(talent_cap=cap))
+        try:self.cap_check.configure(text=f'Raise talent cap to {cap}')  # the checkbox exists only while the Talents page is open
+        except (AttributeError,self.tk.TclError):pass
         if self.talent_auto.get():self.talent_apply()
     def talent_toggle(self):
         update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))
@@ -3345,8 +3398,10 @@ class WatcherWindow:
         if not 1<=cap<=999:raise ValueError('Talent cap must be a whole number from 1 to 999.')
         return cap
     def talent_apply(self):
+        try:cap=self.talent_cap_value()  # read the Tk variable on the window thread, not in the background
+        except ValueError as error:self.say(str(error));return
         def work():
-            cap=self.talent_cap_value();count=talents_apply(cap)
+            count=talents_apply(cap)
             update_session(lambda d:d.update(talent_cap=cap));self.root.after(0,lambda:self.say(f'Talent cap set to {cap} ({count} spots patched together).'))
         self.run_task(work,'Applying the talent cap (the game pauses for a few milliseconds)...')
     def talent_restore(self):
@@ -3359,6 +3414,9 @@ class WatcherWindow:
         except ValueError as error:
             self.say(f'{name}: not changed ({error}).');var.set(f'{current:g}');return
         if value==current:var.set(f'{value:g}');return
+        proposed={o:v for _,o,_,v in read()['config']['targets']};proposed[offset]=value
+        problem=target_relations_problem(proposed)
+        if problem:self.say(f'{name}: not changed ({problem})');var.set(f'{current:g}');return  # same rules as the watcher
         def save_it(d):
             for t in d['config']['targets']:
                 if t[0]==name:t[3]=value
@@ -3378,16 +3436,20 @@ class WatcherWindow:
         trainer_log('gui '+text)
         line=time.strftime('%H:%M:%S  ')+text+'\n';self.log_lines=(self.log_lines+[line])[-200:]
         if self.log is not None:self.log.configure(state='normal');self.log.insert('end',line);self.log.see('end');self.log.configure(state='disabled')
-        if getattr(sys,'frozen',False):print(f'[GUI] {text}',flush=True)
     def run_task(self,work,label):
-        if self.busy:return
+        """Run a task in the background. A request made while another task runs waits in a queue instead of being dropped."""
+        if self.busy:
+            self.queued_tasks=getattr(self,'queued_tasks',[])+[(work,label)];self.say(f'Queued: {label}');return
         self.busy=True;self.say(label)
-        def target():
+        def target(work=work):
             try:
                 with redirect_stdout(io.StringIO()):work()
             except Exception as error:
                 message=str(error);self.root.after(0,lambda:self.say(f'Not applied: {message}'))
-            finally:self.busy=False
+            finally:
+                self.busy=False
+                if getattr(self,'queued_tasks',None):
+                    next_work,next_label=self.queued_tasks.pop(0);self.root.after(0,lambda:self.run_task(next_work,next_label))
         threading.Thread(target=target,daemon=True).start()
     def start(self):
         if not configured():return self.locate_game()
@@ -3412,7 +3474,7 @@ class WatcherWindow:
                 try:self.memory.close()
                 except Exception:pass
             self.memory=OpenProcess(pid=pid,permission=0x410);self.mem_pid=pid
-            with Path(data['game_exe']).open('rb') as stream:self.digest=hashlib.file_digest(stream,'sha256').hexdigest().lower()
+            self.digest=exe_digest(data['game_exe'])
         raw=self.memory.read_bytes(int(base,16)-24,1400)
         return {n:struct.unpack_from('<'+f,raw,off+24)[0] for n,off,f,_ in effective_targets(data,self.digest)}
     def game_running(self):
@@ -3437,6 +3499,8 @@ class WatcherWindow:
             state=monitor.get('state','stopped') if alive else 'stopped'
             self.headline.set(STATE_TITLES.get(state,state.replace('_',' ').capitalize()));self.dot.itemconfigure(self.dot_id,fill=self.COLORS.get(state,'#6b6b6b'))
             self.sub.set(monitor.get('status') if alive and monitor.get('status') else '' if alive and state in ('applying','waiting_progress') else describe_state(monitor if alive else dict(),state))
+            text_now=(self.headline.get(),self.sub.get())
+            if text_now!=getattr(self,'last_status_text',None):self.last_status_text=text_now;self.fit_height()  # long status text: grow the window so the footer stays visible
             self.toggle_button.configure(text='Stop' if alive else 'Start')
             if not self.busy and time.monotonic()>=getattr(self,'talent_next',0):
                 self.talent_next=time.monotonic()+4;self.talent_status.set(self.describe_talents(data))
@@ -3457,7 +3521,8 @@ class WatcherWindow:
                 v=values.get(name)
                 if applied is not None and name not in applied:var.set('Not verified')
                 else:var.set('-' if v is None else (f'{v:,.0f}' if abs(v)>=100 else f'{v:.3g}'))
-        except Exception:pass
+        except Exception as error:
+            if str(error)!=getattr(self,'last_refresh_error',None):trainer_log(f'window refresh: {error!r}');self.last_refresh_error=str(error)
         self.root.after(1000,self.refresh)
 
 def gui():
@@ -3535,7 +3600,7 @@ def self_test():
             return backend,clock,engine
         def layout_fixture(self,d=800,o=1040):
             """Sparse fake process memory holding one actor whose layout differs from the saved build."""
-            H=0x100200;name=b'Nelbin';mem=bytearray(0x20000);BASE=0x100000
+            H=0x100200;name=b'Hero';mem=bytearray(0x20000);BASE=0x100000
             def put(address,data):mem[address-BASE:address-BASE+len(data)]=data
             put(0x108000,name);
             put(0x109000,bytes([0,0,0,0])+struct.pack('<f',.075)+bytes([14,0,0,0])+struct.pack('<f',.007)+bytes([28,0,0,0])+struct.pack('<f',.2))
@@ -3551,7 +3616,7 @@ def self_test():
             class Proc:
                 pid=1
                 def create_time(_):return 5.
-            recipe=dict(name='Nelbin',name_header_offset=432,stats_offset=1224,
+            recipe=dict(name='Hero',name_header_offset=432,stats_offset=1224,
                         targets=[('Max Health',0,'f',9999.),('Damage',4,'f',1.),('Gold Wallet',120,'I',99)])
             return Memory(),Proc(),H,recipe,name.decode()
         def test_learner_finds_shifted_owner_and_skips_bad_wallet(self):
@@ -3565,7 +3630,7 @@ def self_test():
         def layout_backend(self):
             backend=object.__new__(AutoBackend)
             targets=[('Max Health',0,'f',9999.),('Damage',4,'f',1.),('Crit',12,'f',1.),('Gold Wallet',120,'I',99)]
-            backend.base_recipe=dict(name='Nelbin',name_header_offset=432,stats_offset=1224);backend.base_targets=targets;backend.build='x'
+            backend.base_recipe=dict(name='Hero',name_header_offset=432,stats_offset=1224);backend.base_targets=targets;backend.build='x'
             return backend
         def test_layout_drops_unverified_and_remaps(self):
             backend=self.layout_backend()
@@ -3594,6 +3659,24 @@ def self_test():
             state=engine.step()
             self.assertNotEqual(state['state'],'blocked')
             self.assertEqual(backend.writes,[])
+        def test_target_rules_are_shared(self):
+            self.assertIsNotNone(target_relations_problem({0:0.5}))
+            self.assertIsNotNone(target_relations_problem({0:10.,112:20.}))
+            self.assertIsNotNone(target_relations_problem({8:0.}))
+            self.assertIsNone(target_relations_problem({0:100.,112:50.,8:1.5}))
+        def test_corrupt_session_is_backed_up_and_reset(self):
+            import tempfile
+            global SESSION
+            old=SESSION
+            with tempfile.TemporaryDirectory() as folder:
+                SESSION=Path(folder)/'session.json'
+                SESSION.write_text('{not json',encoding='utf-8')
+                try:
+                    data=read()
+                    self.assertIn('config',data)
+                    self.assertTrue(list(Path(folder).glob('session.corrupt-*.json')))
+                finally:
+                    SESSION=old
         def test_failed_step_clears_duplicate_history(self):
             backend,clock,engine=self.recovery_fixture();backend.ambiguous=True
             for _ in range(3):engine.step()
@@ -3604,7 +3687,7 @@ def self_test():
                 address=0x100000;size=0x20000;is_readable=True;is_writable=True;is_executable=False
             memory.snapshot_memory_regions=lambda:[Region()]
             found=find_characters(memory,proc,dict(recipe,owner_offset=968))
-            self.assertEqual([(c['name'],c['player_id']) for c in found],[('Nelbin',777)])
+            self.assertEqual([(c['name'],c['player_id']) for c in found],[('Hero',777)])
         def test_core_scan_finds_the_stat_block_by_its_field_pattern(self):
             BASE=0x100000;mem=bytearray(0x20000);H=0x100400
             def put(address,data):mem[address-BASE:address-BASE+len(data)]=data
@@ -3659,10 +3742,10 @@ def self_test():
             self.assertEqual(find_characters(memory,proc,dict(recipe,owner_offset=968)),[])
         def test_scene_detection(self):
             def lines(*texts,y=100):return [(10,y+i*40,200,y+i*40+30,t) for i,t in enumerate(texts)]
-            self.assertEqual(detect_scene(lines('Collection','Drop Tables','Codex','Talents','Nelbin'),2000,1360),'menu')
+            self.assertEqual(detect_scene(lines('Collection','Drop Tables','Codex','Talents','Hero'),2000,1360),'menu')
             self.assertEqual(detect_scene(lines('Co-op lobby','Waiting for players','Start'),2000,1360),'lobby')
             self.assertEqual(detect_scene(lines('LEVEL UP!','Choose a spell'),2000,1360),'level_up')
-            self.assertEqual(detect_scene(lines('Nelbin','Zurubesh'),2000,1360),'unknown')
+            self.assertEqual(detect_scene(lines('Hero','Zurubesh'),2000,1360),'unknown')
         def test_state_reports_menu_and_lobby_until_a_record_appears(self):
             backend,clock,engine=self.recovery_fixture();backend.absent=True;backend.scene='menu'
             self.assertEqual(engine.step()['state'],'in_menu')
@@ -3671,10 +3754,10 @@ def self_test():
             backend.absent=False;backend.scene='menu'
             self.assertEqual(engine.step()['state'],'waiting_progress');self.assertIsNone(backend.scene)
         def test_auto_name_is_released_for_each_run_but_pinned_name_is_kept(self):
-            auto=object.__new__(AutoBackend);auto.pinned=False;auto.name='Nelbin';auto.detect_next=99;auto.ambiguous_names=['x']
+            auto=object.__new__(AutoBackend);auto.pinned=False;auto.name='Hero';auto.detect_next=99;auto.ambiguous_names=['x']
             auto.release_name();self.assertIsNone(auto.name);self.assertEqual(auto.detect_next,0);self.assertIsNone(auto.ambiguous_names)
-            pinned=object.__new__(AutoBackend);pinned.pinned=True;pinned.name='Nelbin';pinned.detect_next=99;pinned.ambiguous_names=None
-            pinned.release_name();self.assertEqual(pinned.name,'Nelbin')
+            pinned=object.__new__(AutoBackend);pinned.pinned=True;pinned.name='Hero';pinned.detect_next=99;pinned.ambiguous_names=None
+            pinned.release_name();self.assertEqual(pinned.name,'Hero')
         def test_run_reset_releases_the_name(self):
             backend,clock,engine=self.recovery_fixture();backend.released=0
             backend.release_name=lambda:setattr(backend,'released',backend.released+1)
@@ -3912,36 +3995,36 @@ def self_test():
             class Memory:
                 def __init__(self):
                     self.raw=bytearray(delta+992)
-                    struct.pack_into('<3Q',self.raw,0,6,0x40000,6)
+                    struct.pack_into('<3Q',self.raw,0,8,0x40000,4)  # cap, pointer, length of 'Hero'
                     struct.pack_into('<I',self.raw,delta-24,42)
                     struct.pack_into('<I',self.raw,delta+104,1)
                     struct.pack_into('<f',self.raw,delta,500.)
                     struct.pack_into('<f',self.raw,delta+112,9999.)
                     struct.pack_into('<3Q',self.raw,delta+968,8,0x50000,2)
                 def read_bytes(self,address,size):
-                    if address==0x40000:return b'Nelbin'
+                    if address==0x40000:return b'Hero'
                     if address==0x50000:return struct.pack('<IfIf',14,.0075,28,.2)
                     if address==base-delta:return bytes(self.raw)
                     raise ValueError('Unexpected read')
             return Memory(),Process(),base,recipe,delta
         def test_health_recovery_requires_explicit_bounded_lease(self):
             memory,p,base,recipe,delta=self.actor_fixture()
-            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Nelbin')
-            sample=actor_snapshot(memory,p,base,recipe,'Nelbin',expected_id=42,health_ceiling=9999.)
+            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Hero')
+            sample=actor_snapshot(memory,p,base,recipe,'Hero',expected_id=42,health_ceiling=9999.)
             self.assertTrue(sample['hp_transition'])
-            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Nelbin',expected_id=43,health_ceiling=9999.)
+            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Hero',expected_id=43,health_ceiling=9999.)
             struct.pack_into('<f',memory.raw,delta+112,10001.)
-            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Nelbin',expected_id=42,health_ceiling=9999.)
+            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Hero',expected_id=42,health_ceiling=9999.)
         def test_recovery_does_not_relax_other_counters(self):
             memory,p,base,recipe,delta=self.actor_fixture()
             struct.pack_into('<I',memory.raw,delta+52,100001)
-            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Nelbin',expected_id=42,health_ceiling=9999.)
+            with self.assertRaises(ValueError):actor_snapshot(memory,p,base,recipe,'Hero',expected_id=42,health_ceiling=9999.)
         def auto_profile_fixture(self):
             targets=[['stat'+str(off),off,'I' if off in INTEGER_OFFSETS else 'f',1] for off in sorted(AUTO_CORE_OFFSETS)]
             for t in targets:
                 if t[1]==20:t[3]=1.5
                 elif t[1]==28:t[3]=3.
-            return dict(game_sha256='a'*64,native_identity_recipe={'build':'a'*64,'name':'Nelbin'},config={'base':0x20000,'targets':targets})
+            return dict(game_sha256='a'*64,native_identity_recipe={'build':'a'*64,'name':'Hero'},config={'base':0x20000,'targets':targets})
         def test_auto_rejects_invalid_target_plan(self):
             data=self.auto_profile_fixture()
             AutoBackend(data,None)
@@ -3977,7 +4060,7 @@ def self_test():
                 result=prepare_auto_launch(argparse.Namespace(background=False,trace_only=False,seconds=1))
             self.assertFalse(result);self.assertEqual(stopped,[True]);self.assertFalse(state['stop_requested'])
         def test_trace_summary_units(self):
-            c=dict(name='Nelbin',pid=1,player_id=2,level=3,base=65536,pointer=131072,length=6)
+            c=dict(name='Hero',pid=1,player_id=2,level=3,base=65536,pointer=131072,length=6)
             v={'Current Health':9999.,'Max Health':9999.,'Gold Wallet':999999,'Damage':100.99,'Crit Damage':99.99,'Speed':1.5,'Experience':3.}
             result=trace_summary(c,v,'test')
             self.assertEqual(result['hp'],'9999/9999')
@@ -3990,7 +4073,7 @@ def self_test():
                     return struct.pack('<3Q',6,0x30000,6) if size==24 else b'Other!'
             with self.assertRaises(RuntimeError):
                 named_candidate(Memory(),None,{'base':0x20000,'player_id':1},
-                                {'stats_offset':0x4c8,'name_header_offset':0x1b0},'Nelbin')
+                                {'stats_offset':0x4c8,'name_header_offset':0x1b0},'Hero')
         def test_name_header_search(self):
             raw=struct.pack('<3Q',6,0x12340000,6)+struct.pack('<3Q',4,0x12340000,6)+struct.pack('<3Q',6,0,6)
             self.assertEqual(name_headers(raw,6),[(0,0x12340000)])

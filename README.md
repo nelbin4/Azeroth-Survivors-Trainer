@@ -1,6 +1,6 @@
 # Azeroth Survivors Trainer
 
-> **Experimental:** Automatic pattern-based live-record selection is disabled because it wrote to unverified candidates, including in observe-only mode. Automatic application may therefore wait indefinitely on some builds. The Damage/Area hook requires a manually verified address and the exact supported game build; it does not automatically rediscover characters. Do not use the hook with another trainer or hook at the same instructions.
+> **Experimental:** the trainer finds your character by its stat pattern on each run, with no name needed, and pins Damage, Area, Luck and Gold. Area, Luck and Gold are matched to the character panel and Run Stats box once per game version, so open the panel once after a game update. Other stats are not applied on the current build yet.
 
 > The Windows launcher bundles Python, its dependencies, and the default profile. Keep `game.py` beside the executable; a compatible trainer update replaces only that file.
 
@@ -87,6 +87,8 @@ Command-line setup instead of the prompts: `python game.py setup --game "C:\path
 
 For the game executable with SHA-256 `0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274`, run `.\AzerothSurvivorsTrainer.exe hook-current --pid PID --base 0xADDRESS --name CHARACTER` from PowerShell or Command Prompt. Check `trainer.log` for the result. The base must be the manually verified live stat record for the current run. This command does not discover the address. It checks the executable hash, instruction bytes, and name header before attaching, and checks the name again on each write. The hook runs for at most 600 seconds by default; set `--seconds` to a value from 1 to 86400 to change this, or run `.\AzerothSurvivorsTrainer.exe hook-stop` to detach it early. It does not automatically follow a new run or process; do not run it alongside other hooks at those instructions. Python users can use the same commands with `python game.py` instead of the executable.
 
+> **Frida is not bundled.** The `hook-current` command needs the `frida` Python package installed separately (`pip install frida`). The release exe does not include it.
+
 ## Updates
 
 The launcher checks `game.py` on this repository's `main` branch. When it finds a higher `VERSION`, it downloads that file, checks that the source compiles, backs up the previous file under `.update_backup/`, replaces it and restarts. Compilation checks syntax, not whether the update works with every game build or bundled dependency. Your settings and saves are not replaced.
@@ -124,7 +126,7 @@ Add `--no-update` after any command (for example `python game.py gui --no-update
 
 The same commands work with `AzerothSurvivorsTrainer.exe` instead of `python game.py`. The executable runs without a console window and appends output to `trainer.log`; it does not print results to the terminal. A hook command remains active until its timeout, the game closes, or `hook-stop` is called.
 
-The window is a status card (what the trainer is doing, your level, and a Start/Stop button), a **Stats on this build** box showing the stats the trainer is holding (for example Damage and Area), and the **Talents** box: a *Raise talent cap* checkbox (applied now, and every time the game starts) and the *Max talents* class picker with **Create save** and *Open Saves folder*. **Settings** opens a dialog with three tabs: **General** (Write / Observe-only, the talent cap number, the update check and *What's new*), **Stats and targets** (tick stats on or off, or type a new target and press Enter), and **Log**. Closing the window leaves the watcher running; press **Stop** to end it.
+The window is compact (320 pixels wide). It shows the status card and **Stop** / **Launch Game** under it, then **Talents**, **Settings** and **GitHub**, and a footer note with the version. **Talents** opens the talent cap checkbox, the *Max talents* class picker with **Create save** and *Open Saves folder*, inside the window; **Back** returns to the main view. **Settings** opens General (Write / Observe-only, the cap number, the update check, *What's new*), Stats and targets, and Log, also inside the window. The window grows while a panel is open and shrinks back when closed. Closing the window leaves the watcher running; press **Stop** to end it.
 
 ### Max talents without clicking
 
@@ -136,7 +138,7 @@ To undo it, import the `before-max-talents` backup the same way. Notes: the game
 
 ## What it looks at on screen
 
-The trainer never records your screen. Only while **no run is active** it reads text from the **game's own window** about every 10 seconds (a background capture: nothing visible, no cursor or focus change) so the state can say *in menu* or *in lobby*. In a hosted game with several players it also reads your player frame once to tell which character is yours. The text is recognised by Windows' built-in recognition on your PC and the image is deleted immediately. Nothing is uploaded, and nothing is captured while a run is going.
+The trainer never records your screen. Only while **no run is active** it reads text from the **game's own window** about every 10 seconds (a background capture: nothing visible, no cursor or focus change) so the state can say *in menu* or *in lobby*. During a run, for the stats that have no memory match yet (Area, Luck and Gold), it reads the two small stat boxes (the character panel and Run Stats) once per game version to check where those stats are stored. In a hosted game with several players it also reads your player frame once to tell which character is yours. The text is recognised by Windows' built-in recognition on your PC, and each captured image is deleted right after it is read. Nothing is uploaded.
 
 ## How it stays safe
 
