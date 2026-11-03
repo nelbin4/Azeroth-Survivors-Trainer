@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.1.0'
+VERSION = '2.1.1'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -2770,18 +2770,24 @@ def update_from_git():
     found=re.search(r"^VERSION = '([\d.]+)'",git('show','origin/main:game.py').stdout,re.M)
     return found.group(1) if found else None
 
-def auto_update():
-    """At startup: fetch the latest release from GitHub. True means files were replaced and the caller should restart."""
-    if os.environ.get('AZEROTH_UPDATED'):return False
-    try:
-        if SESSION.exists() and not read().get('auto_update',True):return False
-        version=update_from_git() if not getattr(sys,'frozen',False) and (ROOT/'.git').exists() else update_from_zip()
-    except Exception:return False  # offline or GitHub unreachable: just start normally
+def remote_version():
+    """Read-only: the newer VERSION on GitHub main, or None when there is none or GitHub cannot be reached."""
+    import re
+    if os.environ.get('AZEROTH_UPDATED'):return None  # just restarted after an update
+    try:source=http_get(f'https://raw.githubusercontent.com/{REPO}/main/game.py',4000000,4).decode('utf-8')
+    except Exception:return None  # offline: the window simply shows no Update button
+    found=re.search(r"^VERSION = '([\d.]+)'",source,re.M)
+    return found.group(1) if found and parse_version(found.group(1))>parse_version(VERSION) else None
+
+def install_update():
+    """Install the newest release from GitHub now. Returns its version, or None when nothing was installed."""
+    try:version=update_from_git() if not getattr(sys,'frozen',False) and (ROOT/'.git').exists() else update_from_zip()
+    except Exception:return None
     if version:
         try:
             if SESSION.exists():update_session(lambda d:d.update(update_notice=f'Updated to version {version}.'))
         except Exception:pass
-    return bool(version)
+    return version
 
 def restart_after_update():
     subprocess.Popen([sys.executable,str(Path(__file__).resolve()),*sys.argv[1:]],cwd=ROOT,env=child_env(AZEROTH_UPDATED='1'),
@@ -3202,10 +3208,8 @@ class WatcherWindow:
         root.title(APP_NAME);root.geometry('320x220');root.resizable(False,False)  # compact, fixed size
         self.log=None;self.log_lines=[];self.applied_shown=None;self.applied_vars={}
         self.talent_status=tk.StringVar(value='');self.save_status=tk.StringVar(value='')  # exist before any panel is opened
-        self.mode=tk.StringVar(value='write')
         self.talent_cap=tk.StringVar(value=str(read().get('talent_cap',TALENT_DEFAULT_CAP)))
         self.talent_auto=tk.BooleanVar(value=read().get('talent_auto',False))
-        self.field_vars={};self.live_vars={};self.row_widgets={}
         card=ttk.Frame(root,padding=(14,12),relief='groove');card.pack(fill='x',padx=12,pady=(12,8))
         self.dot=tk.Canvas(card,width=14,height=14,highlightthickness=0);self.dot_id=self.dot.create_oval(2,2,12,12,fill='#6b6b6b',outline='');self.dot.pack(side='left',padx=(0,10))
         text=ttk.Frame(card);text.pack(side='left',fill='x',expand=True)
@@ -3221,11 +3225,13 @@ class WatcherWindow:
         self.launch_button=ttk.Button(buttons,text='Launch Game',command=self.launch_game);self.launch_button.pack(side='left',padx=(6,0))
         row=ttk.Frame(foot);row.pack(pady=(0,6))  # centred
         ttk.Button(row,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
-        ttk.Button(row,text='Settings',command=self.open_settings).pack(side='left',padx=(0,6))
+        ttk.Button(row,text='Log',command=self.open_log).pack(side='left',padx=(0,6))
         ttk.Button(row,text='GitHub',command=self.open_github).pack(side='left')
         row2=ttk.Frame(foot);row2.pack(fill='x')
         ttk.Label(row2,text='This app is FREE! Play in solo or co-op host only.',foreground='#b26a00',wraplength=250,justify='left').pack(side='left')
-        ttk.Label(row2,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right',padx=(8,0))  # version on the right edge
+        row3=ttk.Frame(foot);row3.pack(fill='x')
+        self.update_button=ttk.Button(row3,text='Update',command=self.update_now)  # hidden until GitHub has a newer version
+        ttk.Label(row3,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right')  # version on the right edge
         self.foot=tk.StringVar()
         root.protocol('WM_DELETE_WINDOW',self.close)
         self.say('Window opened. The watcher keeps running if you close this window; press Stop to end it.')
@@ -3237,7 +3243,16 @@ class WatcherWindow:
         if not configured():root.after(400,self.locate_game)  # first run: the window is up, now ask where the game is
         elif not auto_alive(read()):root.after(800,self.start)  # starts automatically with the window, in the selected mode
     def check_update(self):
-        if auto_update():self.update_ready=True  # refresh() restarts on the window thread
+        newer=remote_version()
+        if newer:self.update_found=newer  # refresh() shows the Update button on the window thread
+    def update_now(self):
+        self.run_task(self.apply_update,'Installing the update...')
+    def apply_update(self):
+        version=install_update()
+        if version:
+            self.update_ready=True  # refresh() restarts on the window thread
+            self.root.after(0,lambda:self.say(f'Updated to version {version}. Restarting...'))
+        else:self.root.after(0,lambda:self.say('Update not installed. Check your internet connection, or local changes in the trainer folder.'))
     def read_talents(self,data):
         try:self.talent_text=self.describe_talents(data)
         finally:self.talent_reading=False
@@ -3261,16 +3276,16 @@ class WatcherWindow:
         ttk.Button(third,text='Create save',command=self.max_talents_create).pack(side='left',expand=True,fill='x')
         ttk.Button(third,text='Open Saves folder',command=self.open_saves).pack(side='left',expand=True,fill='x',padx=(6,0))
         self.save_status=tk.StringVar(value='')
-    def open_settings(self):
-        self.show_panel('settings')
+    def open_log(self):
+        self.show_panel('log')
     def show_panel(self,name):
-        """Talents and Settings open inside this window, below the status card. Pressing the same button again, or Back, closes them."""
+        """Talents and Log open inside this window, below the status card. Pressing the same button again, or Back, closes them."""
         if getattr(self,'panel_name',None)==name:return self.close_panel()
         if getattr(self,'panel_name',None):self.close_panel()
         ttk=self.ttk
         self.panel=ttk.Frame(self.root,padding=(12,4));self.panel.pack(fill='both',expand=True,before=self.foot_frame)
         head=ttk.Frame(self.panel);head.pack(fill='x',pady=(0,6))
-        ttk.Label(head,text='Talents' if name=='talents' else 'Settings',font=('Segoe UI',10,'bold')).pack(side='left')
+        ttk.Label(head,text='Talents' if name=='talents' else 'Log',font=('Segoe UI',10,'bold')).pack(side='left')
         ttk.Button(head,text='Back',command=self.close_panel).pack(side='right')
         body=ttk.Frame(self.panel);body.pack(fill='both',expand=True)
         if name=='talents':self.build_talents(body)
@@ -3283,34 +3298,11 @@ class WatcherWindow:
         self.root.geometry(f'320x{max(220,self.root.winfo_reqheight())}')
     def close_panel(self):
         if getattr(self,'panel',None) is not None:self.panel.destroy()
-        self.panel=None;self.panel_name=None;self.log=None;self.field_vars={};self.live_vars={};self.row_widgets={};self.cap_check=None
+        self.panel=None;self.panel_name=None;self.log=None;self.cap_check=None
         self.fit_height()
     def build_settings_panel(self,body):
-        ttk=self.ttk
-        notebook=ttk.Notebook(body);notebook.pack(fill='both',expand=True)
-        general=ttk.Frame(notebook,padding=8);stats=ttk.Frame(notebook,padding=8);log=ttk.Frame(notebook,padding=8)
-        notebook.add(general,text='General');notebook.add(stats,text='Stats');notebook.add(log,text='Log')
-        modes=ttk.Frame(general);modes.pack(fill='x',pady=(0,8))
-        ttk.Label(modes,text='Mode').pack(side='left')
-        ttk.Radiobutton(modes,text='Write',variable=self.mode,value='write').pack(side='left',padx=(8,4))
-        ttk.Radiobutton(modes,text='Observe only',variable=self.mode,value='observe').pack(side='left')
-        cap=ttk.Frame(general);cap.pack(fill='x',pady=(0,8))
-        ttk.Label(cap,text='Talent point cap').pack(side='left')
-        entry=ttk.Entry(cap,textvariable=self.talent_cap,width=6);entry.pack(side='left',padx=6)
-        for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e:self.cap_changed())
-        self.build_settings(general)
-        self.build_stats(stats)
-        self.build_log(log)
+        self.build_log(body)  # the log is the only page left in Settings
         self.log.configure(state='normal');self.log.insert('end',''.join(self.log_lines));self.log.see('end');self.log.configure(state='disabled')
-    def cap_changed(self):
-        try:cap=self.talent_cap_value()
-        except ValueError as error:
-            self.say(str(error));self.talent_cap.set(str(read().get('talent_cap',TALENT_DEFAULT_CAP)));return
-        if cap==read().get('talent_cap',TALENT_DEFAULT_CAP):return
-        update_session(lambda d:d.update(talent_cap=cap))
-        try:self.cap_check.configure(text=f'Raise talent cap to {cap}')  # the checkbox exists only while the Talents page is open
-        except (AttributeError,self.tk.TclError):pass
-        if self.talent_auto.get():self.talent_apply()
     def talent_toggle(self):
         update_session(lambda d:d.update(talent_auto=bool(self.talent_auto.get())))
         if self.talent_auto.get():self.talent_apply()
@@ -3325,32 +3317,8 @@ class WatcherWindow:
             self.ttk.Label(row,text=name,width=14).pack(side='left')
             var=self.tk.StringVar(value='');self.applied_vars[name]=var
             self.ttk.Label(row,textvariable=var,foreground='#2e7d32').pack(side='right')
-    def build_rows(self):
-        ttk=self.ttk;data=read();disabled=set(data.get('gui_disabled',[]))
-        for col,title in enumerate(('Field','Live','Target'),start=1):ttk.Label(self.rows,text=title,foreground='#6b6b6b').grid(row=0,column=col,sticky='w',padx=6)
-        for row,(name,offset,fmt,value) in enumerate(data['config']['targets'],start=1):
-            var=self.tk.BooleanVar(value=name not in disabled);self.field_vars[name]=var
-            check=ttk.Checkbutton(self.rows,variable=var,command=self.save_fields);check.grid(row=row,column=0)
-            ttk.Label(self.rows,text=name,width=12).grid(row=row,column=1,sticky='w',padx=3)
-            live=self.tk.StringVar(value='-');self.live_vars[name]=live
-            ttk.Label(self.rows,textvariable=live,width=9).grid(row=row,column=2,sticky='w',padx=3)
-            target=self.tk.StringVar(value=f'{value:g}')
-            entry=ttk.Entry(self.rows,textvariable=target,width=8,state='disabled' if offset==20 else 'normal');entry.grid(row=row,column=3,sticky='w',padx=3)
-            for event in ('<Return>','<FocusOut>'):entry.bind(event,lambda e,n=name,o=offset,f=fmt,v=target:self.commit_target(n,o,f,v))
-            self.row_widgets[name]=(check,entry,offset)
-    def build_stats(self,body):
-        tk=self.tk;ttk=self.ttk
-        canvas=tk.Canvas(body,highlightthickness=0,height=150,width=260);bar=ttk.Scrollbar(body,command=canvas.yview);canvas.configure(yscrollcommand=bar.set)
-        bar.pack(side='right',fill='y');canvas.pack(side='left',fill='both',expand=True)
-        self.rows=ttk.Frame(canvas);canvas.create_window((0,0),window=self.rows,anchor='nw')
-        self.rows.bind('<Configure>',lambda e:canvas.configure(scrollregion=canvas.bbox('all')))
-        self.build_rows()
     def build_log(self,body):
         self.log=self.tk.Text(body,height=7,state='disabled',font=('Consolas',9));self.log.pack(fill='x')
-    def build_settings(self,body):
-        ttk=self.ttk;tk=self.tk
-        self.updates=tk.BooleanVar(value=read().get('auto_update',True))
-        ttk.Checkbutton(body,text='Check for updates at startup',variable=self.updates,command=lambda:update_session(lambda d:d.update(auto_update=bool(self.updates.get())))).pack(anchor='w')
     def locate_game(self):
         from tkinter import filedialog
         path=filedialog.askopenfilename(parent=self.root,title='Select AzerothSurvivors.exe (the game you downloaded)',filetypes=[('Game executable','AzerothSurvivors.exe'),('Executable','*.exe')])
@@ -3418,23 +3386,6 @@ class WatcherWindow:
         def work():
             count=talents_apply(TALENT_ORIGINAL);self.root.after(0,lambda:self.say(f'Talent cap restored to {TALENT_ORIGINAL} ({count} spots).'))
         self.run_task(work,'Restoring the talent cap...')
-    def commit_target(self,name,offset,fmt,var):
-        current=next((t[3] for t in read()['config']['targets'] if t[0]==name),None)
-        try:value=parse_target(var.get(),offset,fmt)
-        except ValueError as error:
-            self.say(f'{name}: not changed ({error}).');var.set(f'{current:g}');return
-        if value==current:var.set(f'{value:g}');return
-        proposed={o:v for _,o,_,v in read()['config']['targets']};proposed[offset]=value
-        problem=target_relations_problem(proposed)
-        if problem:self.say(f'{name}: not changed ({problem})');var.set(f'{current:g}');return  # same rules as the watcher
-        def save_it(d):
-            for t in d['config']['targets']:
-                if t[0]==name:t[3]=value
-        update_session(save_it);var.set(f'{value:g}');self.say(f'{name} target set to {value:g}.')
-        if auto_alive(read()):self.say('Restarting the watcher to use it...');self.start()
-    def save_fields(self):
-        off=sorted(n for n,v in self.field_vars.items() if not v.get())
-        update_session(lambda d:d.update(gui_disabled=off));self.say('Field selection saved; the watcher picks it up within about 10 seconds.')
     def say(self,text):
         trainer_log('gui '+text)
         line=time.strftime('%H:%M:%S  ')+text+'\n';self.log_lines=(self.log_lines+[line])[-200:]
@@ -3456,30 +3407,16 @@ class WatcherWindow:
         threading.Thread(target=target,daemon=True).start()
     def start(self):
         if not configured():return self.locate_game()
-        trace=self.mode.get()=='observe'
         def work():
             stop();time.sleep(1)
-            prepare_auto_launch(argparse.Namespace(background=True,seconds=28800,trace_only=trace))
-        self.run_task(work,'Starting watcher ('+('observe only' if trace else 'WRITE mode')+')...')
+            prepare_auto_launch(argparse.Namespace(background=True,seconds=28800,trace_only=False))
+        self.run_task(work,'Starting watcher...')
     def stop(self):self.run_task(stop,'Stopping watcher...')
     def close(self):
         if self.memory:
             try:self.memory.close()
             except Exception:pass
         self.root.destroy()
-    def live_values(self,monitor):
-        from PyMemoryEditor import OpenProcess
-        pid=monitor.get('game_pid');base=monitor.get('base')
-        if not pid or not base:return {}
-        data=read()
-        if self.mem_pid!=pid:
-            if self.memory:
-                try:self.memory.close()
-                except Exception:pass
-            self.memory=OpenProcess(pid=pid,permission=0x410);self.mem_pid=pid
-            self.digest=exe_digest(data['game_exe'])
-        raw=self.memory.read_bytes(int(base,16)-24,1400)
-        return {n:struct.unpack_from('<'+f,raw,off+24)[0] for n,off,f,_ in effective_targets(data,self.digest)}
     def game_running(self):
         """True when the configured game executable is already running. Checked at most every 2 seconds."""
         now=time.monotonic()
@@ -3493,6 +3430,8 @@ class WatcherWindow:
     def refresh(self):
         try:
             if getattr(self,'update_ready',False):restart_after_update()
+            if getattr(self,'update_found',None) and not getattr(self,'update_shown',False):
+                self.update_button.configure(text='Update');self.update_button.pack(side='left');self.update_shown=True
             if not configured():
                 self.alive=False;self.headline.set('Game not set up yet');self.sub.set('Locate AzerothSurvivors.exe to begin.')
                 self.dot.itemconfigure(self.dot_id,fill='#b26a00');self.toggle_button.configure(text='Locate game',width=12)
@@ -3511,22 +3450,12 @@ class WatcherWindow:
                 self.talent_next=time.monotonic()+4;self.talent_reading=True
                 threading.Thread(target=self.read_talents,args=(data,),daemon=True).start()
             if state!=self.last_state:self.say('State: '+state+(f" ({monitor.get('reason')})" if monitor.get('reason') else ''));self.last_state=state
-            try:values=self.live_values(monitor) if alive else {}
-            except Exception:values={}
-            applied=monitor.get('applied') if alive else None
             shown=monitor.get('applied') or []
             self.refresh_applied(shown)
             targets={n:v for n,_,_,v in data['config']['targets']}
             for name,var in self.applied_vars.items():
                 pct=f"+{round((targets.get(name,1)-1)*100):,}%" if name in targets else ''
                 var.set(pct)
-            for name,(check,entry,offset) in self.row_widgets.items():
-                on=applied is None or name in applied
-                check.configure(state='normal' if on else 'disabled');entry.configure(state='normal' if on and offset!=20 else 'disabled')
-            for name,var in self.live_vars.items():
-                v=values.get(name)
-                if applied is not None and name not in applied:var.set('Not verified')
-                else:var.set('-' if v is None else (f'{v:,.0f}' if abs(v)>=100 else f'{v:.3g}'))
         except Exception as error:
             if str(error)!=getattr(self,'last_refresh_error',None):trainer_log(f'window refresh: {error!r}');self.last_refresh_error=str(error)
         self.root.after(1000,self.refresh)
@@ -3806,7 +3735,7 @@ def self_test():
             args,kw=calls[0]
             self.assertEqual(args[-1],'gui');self.assertEqual(kw['env']['AZEROTH_UPDATED'],'1')
             os.environ['AZEROTH_UPDATED']='1'
-            try:self.assertFalse(auto_update())  # the flag prevents an update loop after a restart
+            try:self.assertIsNone(remote_version())  # the flag prevents an update loop after a restart
             finally:del os.environ['AZEROTH_UPDATED']
         def test_source_update_changes_only_game_and_rejects_bad_code(self):
             import tempfile
@@ -4244,8 +4173,6 @@ if __name__ == '__main__':
     command = sys.argv[1]
     if '--no-update' in sys.argv:sys.argv.remove('--no-update');os.environ['AZEROTH_UPDATED']='1'
     try:
-        if command=='auto' and '--background' in sys.argv:
-            if auto_update():restart_after_update()  # the silent watcher has no window, so it checks before it starts watching
         if command not in ('setup','self-test','version','--version','--help','-h','help','gui','hook-current','hook-stop'):ensure_configured()
         if command in ('start','_worker','named-core','_named_core','source-apply','lifesteal-test','apply-once','apply-host','capture','numeric-watch','text-watch','inspect-copy','observe-swaps','discover') and auto_alive(read()):
             raise RuntimeError('Automatic watcher is active. Stop it before running a competing writer or debugger.')

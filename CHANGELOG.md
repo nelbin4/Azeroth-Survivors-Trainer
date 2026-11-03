@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.1.1 (experimental)
+
+- Settings is now a Log button. The General tab, the Stats tab and the Mode choice are removed; the watcher always writes.
+- At startup the window checks GitHub and shows an Update button when there is a newer version; clicking it installs the update and restarts. Nothing installs by itself any more, and the silent watcher no longer updates.
+- The "Check for updates at startup" checkbox is removed.
+- The What's new button is removed; the GitHub button opens the release notes.
+
 ## 2.1.0 (experimental)
 
 - The window checks for updates in the background, so a slow GitHub check no longer delays the window. The silent watcher still checks before it starts.
