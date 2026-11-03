@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.7 (experimental)
+
+- Talents and Settings open inside the window, with a Back button. The window grows while a panel is open.
+- Stop and Launch Game are centred; the footer note reads "This app is FREE! Play in solo or co-op host only."
+- Launch Game asks for AzerothSurvivors.exe if the saved location is missing or invalid, and saves the new one.
+- The status reads "Freezing stats" while Damage, Area, Luck and Gold are being held.
+- Fix: Stop and Launch Game are shown again.
+
 ## 2.0.6 (experimental)
 
 - Window: compact 320 x 220, fixed size. Stop and Launch Game sit above Talents, Settings and GitHub; the status text is centred; the version shows on the right of the footer.

@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.0.6'
+VERSION = '2.0.7'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -3122,7 +3122,7 @@ def describe_state(monitor,state):
     return text
 
 STATE_TITLES = {'starting': 'Starting up', 'waiting_process': 'Waiting for the game', 'in_menu': 'In the menu', 'in_lobby': 'In the lobby',
-                'seeking_record': 'Looking for your character', 'waiting_progress': 'Waiting for you to level up', 'applying': 'Applying your stats',
+                'seeking_record': 'Looking for your character', 'waiting_progress': 'Waiting for you to level up', 'applying': 'Freezing stats',
                 'learning': 'Learning this game version', 'learned': 'Learned this game version', 'recovering': 'Reconnecting',
                 'blocked_ambiguous': 'Which character is yours?', 'blocked': 'Blocked', 'failed': 'Stopped by a problem', 'expired': 'Timed out', 'stopped': 'Stopped'}
 
@@ -3156,19 +3156,19 @@ class WatcherWindow:
         self.headline=tk.StringVar(value='...');self.sub=tk.StringVar(value='')
         ttk.Label(text,textvariable=self.headline,font=('Segoe UI',11,'bold'),wraplength=190,justify='center').pack(fill='x')  # centered status text
         ttk.Label(text,textvariable=self.sub,foreground='#555555',wraplength=190).pack(anchor='w')
-        buttons=ttk.Frame(root)  # Stop and Launch Game: packed above the footer rows below
-        self.toggle_button=ttk.Button(buttons,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='left')
-        self.launch_button=ttk.Button(buttons,text='Launch Game',command=self.launch_game);self.launch_button.pack(side='left',padx=(6,0))  # same row as Stop
         shown=ttk.LabelFrame(root,text='Stats on this build')  # kept but not shown: stats are applied in the background
         self.stats_box=ttk.Frame(shown,padding=(8,4));self.stats_box.pack(fill='x')
         foot=ttk.Frame(root);foot.pack(side='bottom',fill='x',padx=12,pady=(0,10))
-        buttons.pack(in_=foot,side='top',fill='x',pady=(0,6))
-        row=ttk.Frame(foot);row.pack(fill='x',pady=(0,6))
+        self.foot_frame=foot;self.panel=None;self.panel_name=None
+        buttons=ttk.Frame(foot);buttons.pack(side='top',pady=(0,6))  # centred  # Stop and Launch Game, above the footer rows
+        self.toggle_button=ttk.Button(buttons,text='Start',width=8,command=self.toggle_run);self.toggle_button.pack(side='left')
+        self.launch_button=ttk.Button(buttons,text='Launch Game',command=self.launch_game);self.launch_button.pack(side='left',padx=(6,0))
+        row=ttk.Frame(foot);row.pack(pady=(0,6))  # centred
         ttk.Button(row,text='Talents',command=self.open_talents).pack(side='left',padx=(0,6))
         ttk.Button(row,text='Settings',command=self.open_settings).pack(side='left',padx=(0,6))
         ttk.Button(row,text='GitHub',command=self.open_github).pack(side='left')
         row2=ttk.Frame(foot);row2.pack(fill='x')
-        ttk.Label(row2,text='Solo or host only',foreground='#b26a00').pack(side='left')
+        ttk.Label(row2,text='This app is FREE! Play in solo or co-op host only.',foreground='#b26a00',wraplength=250,justify='left').pack(side='left')
         ttk.Label(row2,text=f'v{VERSION}',foreground='#6b6b6b').pack(side='right',padx=(8,0))  # version on the right edge
         self.foot=tk.StringVar()
         root.protocol('WM_DELETE_WINDOW',self.close)
@@ -3183,12 +3183,7 @@ class WatcherWindow:
         import webbrowser
         webbrowser.open(f'https://github.com/{REPO}')
     def open_talents(self):
-        tk=self.tk;ttk=self.ttk
-        if getattr(self,'talents_window',None) and self.talents_window.winfo_exists():self.talents_window.lift();return
-        win=self.talents_window=tk.Toplevel(self.root);win.title('Talents');win.transient(self.root)
-        body=ttk.Frame(win,padding=12);body.pack(fill='both',expand=True)
-        self.build_talents(body)
-        win.protocol('WM_DELETE_WINDOW',lambda:(win.destroy(),setattr(self,'talents_window',None)))
+        self.show_panel('talents')
     def build_talents(self,body):
         tk=self.tk;ttk=self.ttk
         first=ttk.Frame(body);first.pack(fill='x',pady=(0,6))
@@ -3204,12 +3199,30 @@ class WatcherWindow:
         ttk.Button(second,text='Open Saves folder',command=self.open_saves).pack(side='left',padx=6)
         self.save_status=tk.StringVar(value='')
     def open_settings(self):
-        tk=self.tk;ttk=self.ttk
-        if getattr(self,'settings_window',None) and self.settings_window.winfo_exists():self.settings_window.lift();return
-        win=self.settings_window=tk.Toplevel(self.root);win.title('Settings');win.transient(self.root)
-        notebook=ttk.Notebook(win);notebook.pack(fill='both',expand=True,padx=10,pady=10)
-        general=ttk.Frame(notebook,padding=12);stats=ttk.Frame(notebook,padding=12);log=ttk.Frame(notebook,padding=12)
-        notebook.add(general,text='General');notebook.add(stats,text='Stats and targets');notebook.add(log,text='Log')
+        self.show_panel('settings')
+    def show_panel(self,name):
+        """Talents and Settings open inside this window, below the status card. Pressing the same button again, or Back, closes them."""
+        if getattr(self,'panel_name',None)==name:return self.close_panel()
+        if getattr(self,'panel_name',None):self.close_panel()
+        ttk=self.ttk
+        self.panel=ttk.Frame(self.root,padding=(12,4));self.panel.pack(fill='both',expand=True,before=self.foot_frame)
+        head=ttk.Frame(self.panel);head.pack(fill='x',pady=(0,6))
+        ttk.Label(head,text='Talents' if name=='talents' else 'Settings',font=('Segoe UI',10,'bold')).pack(side='left')
+        ttk.Button(head,text='Back',command=self.close_panel).pack(side='right')
+        body=ttk.Frame(self.panel);body.pack(fill='both',expand=True)
+        if name=='talents':self.build_talents(body)
+        else:self.build_settings_panel(body)
+        self.panel_name=name
+        self.root.geometry('320x500')
+    def close_panel(self):
+        if getattr(self,'panel',None) is not None:self.panel.destroy()
+        self.panel=None;self.panel_name=None;self.log=None;self.field_vars={};self.live_vars={};self.row_widgets={}
+        self.root.geometry('320x220')
+    def build_settings_panel(self,body):
+        ttk=self.ttk
+        notebook=ttk.Notebook(body);notebook.pack(fill='both',expand=True)
+        general=ttk.Frame(notebook,padding=8);stats=ttk.Frame(notebook,padding=8);log=ttk.Frame(notebook,padding=8)
+        notebook.add(general,text='General');notebook.add(stats,text='Stats');notebook.add(log,text='Log')
         modes=ttk.Frame(general);modes.pack(fill='x',pady=(0,8))
         ttk.Label(modes,text='Mode').pack(side='left')
         ttk.Radiobutton(modes,text='Write',variable=self.mode,value='write').pack(side='left',padx=(8,4))
@@ -3223,10 +3236,6 @@ class WatcherWindow:
         self.build_stats(stats)
         self.build_log(log)
         self.log.configure(state='normal');self.log.insert('end',''.join(self.log_lines));self.log.see('end');self.log.configure(state='disabled')
-        win.protocol('WM_DELETE_WINDOW',self.close_settings)
-    def close_settings(self):
-        self.log=None;self.field_vars={};self.live_vars={};self.row_widgets={}
-        self.settings_window.destroy()
     def cap_changed(self):
         try:cap=self.talent_cap_value()
         except ValueError as error:
@@ -3281,9 +3290,19 @@ class WatcherWindow:
         try:configure(path,None)
         except Exception as error:self.say(f'Could not use that file: {error}');return False
         self.say(f'Game set to {path}.');self.start();return True
+    def ask_game_location(self):
+        """Ask for AzerothSurvivors.exe when the saved location is missing or invalid, and save the new one. Does not start the watcher."""
+        from tkinter import filedialog,messagebox
+        path=filedialog.askopenfilename(parent=self.root,title='Select AzerothSurvivors.exe (the game you downloaded)',filetypes=[('Game executable','AzerothSurvivors.exe'),('Executable','*.exe')])
+        if not path:return False
+        try:configure(path,None)
+        except Exception as error:messagebox.showerror('Invalid file',str(error),parent=self.root);return False
+        self.say(f'Game location saved: {path}');return True
     def launch_game(self):
         from tkinter import messagebox
-        if not configured() and not self.locate_game():return
+        location=read().get('game_exe','') if configured() else ''
+        if not location or not Path(location).is_file():
+            if not self.ask_game_location():return
         try:
             started=launch_game(read()['game_exe'])
         except (OSError,ValueError,KeyError) as error:
