@@ -430,3 +430,11 @@ The earlier notes concluded that no safe change was possible. That was wrong. Wh
 ### Area (1.9.3)
 Area sits at +44 on build eb7447 (1.224 on the sheet's +22%). Pinned at 2, 4, 10, 30 and 100.99 for five seconds each and then 15 s at 100.99 in a party run: no hang. The earlier crash was therefore not Area alone; extra targets (u32 at +56) at 9999 remains the main suspect. Per-build offsets live in `CORE_FIELDS`; builds not listed there get Damage only.
 
+## Live stat observations: build 6ca5f4ba (2026-11-06)
+
+On the player's level 114 Shaman, a paused-screen comparison found matching values in the active stat block: health +0 (1839.2), crit +12 (0.369968), crit damage +16 (2.96912), speed +20 (1.5768), pickup +24 (42.385), armor +32 (0.39016), regeneration +40 (15.5744), extra targets +56 (u32 2), echo +60 (0.2688), buff power +68 (0.72), and DoT stacks +72 (u32 3, while the screen shows 4). These are correlations from one snapshot; they do not by themselves establish safe boosted values or prove that a field stays live across runs. In particular, the earlier all-stat test hung and the profile's 9,999 extra targets remains a concern.
+
+In the same build, Luck +48 tracked the displayed change from 22.5% to 33%; Gold Bonus +52 tracked 31%, 56%, and 71%. A temporary hardware watchpoint on +52 identified the game's writer; the nearby store layout also matched the previously studied 0e8e314d build. The executable scanner treats this structural match as trusted only for those two independently observed hashes; unknown builds still require the existing verification path.
+
+During a live run of this exact build, the profile values were also tested one at a time: Regeneration at 9999 for five seconds, then Crit, Crit Damage, Armor, Echo, Buff Power and Pickup for three seconds each. Each value read back and the game was responsive after the individual test. Those seven fields are now scheduled after the four primary stats for this build; these short tests do not establish long-term stability, especially when boosts are combined. Targets and DoT stacks remain excluded from automatic writes.
+

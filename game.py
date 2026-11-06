@@ -41,7 +41,7 @@ from contextlib import contextmanager, nullcontext
 import psutil
 
 APP_NAME = 'Azeroth Survivors Trainer'
-VERSION = '2.1.2'
+VERSION = '2.1.3'
 REPO = 'nelbin4/Azeroth-Survivors-Trainer'
 UPDATE_FILES = ('game.py', 'profile.example.json', 'requirements.txt', 'README.md', 'CHANGELOG.md', 'LICENSE', 'docs/TECHNICAL_NOTES.md')
 USER_FILES = ()  # files users edit by hand: an update never overwrites an existing copy
@@ -261,6 +261,16 @@ CORE_FIELDS = {  # extra stats pinned in pattern mode, per game build (offsets r
     'eb744751b4e17ec1397b0cdc85a22af63b6af63c1da1d9c2861762c3c4d8947c':{'Area':44},
     '0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274':{'Luck':48,'Gold Bonus':52},  # the game executable this trainer runs against; Area is verified against the sheet at runtime
 }
+VERIFIED_STAT_WRITER_BUILDS = frozenset((
+    '0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274',
+    '6ca5f4ba4eb6b26716e4b7d9e03cbd25ddafe7582dcd8e55333e070a28058afa',
+))
+VERIFIED_EXTRA_FIELDS = {
+    # Exact build: displayed values matched these fields, then each profile value was briefly tested individually.
+    '6ca5f4ba4eb6b26716e4b7d9e03cbd25ddafe7582dcd8e55333e070a28058afa':{
+        'Regeneration':(40,9999.),'Crit':(12,99.99),'Crit Damage':(16,99.99),'Armor':(32,1.),
+        'Echo':(60,99.99),'Buff Power':(68,99.99),'Pickup':(24,9999.),'Experience':(28,3.)},
+}
 
 def core_window_ok(values):
     """The first eight stat fields in their fixed order: health, damage, haste, crit, crit damage, speed, pickup, experience."""
@@ -327,8 +337,9 @@ def core_live(memory,bases,seconds=4.5):
     """
     return []
 
-CORE_PRIORITY = ['Damage','Area','Luck','Gold Bonus']  # first: Damage and Area; second: the rest (pinned less often)
-FIRST_PRIORITY = ('Damage','Area')
+CORE_PRIORITY = ['Damage','Area','Luck','Gold Bonus','Regeneration','Crit','Crit Damage','Armor','Echo','Buff Power','Pickup','Experience']
+CORE_INTERVALS = dict.fromkeys(CORE_PRIORITY,20)
+CORE_INTERVALS.update({'Damage':1,'Area':2,'Luck':5,'Gold Bonus':10})
 
 HOOK_BUILDS = {'0e8e314df4d78ab211b1bef5c48d78d713ed64260894af342f998d298d74d274'}  # game executable SHA-256 values the hook's instruction offsets were verified against
 
@@ -446,7 +457,7 @@ class AutoBackend:
         self.targets=targets;self.recipe['targets']=targets;self.hash_cache={}
         self.hints={data['config']['base']};self.injected=set();self.regions=[];self.region_index=0;self.offset=0
         self.scan_found={};self.scan_errors=0;self.scan_bytes=0;self.scan_complete=False;self.scan_restart=0;self.last_hint=0
-        self.backed_up=set();self.missing_sources=[]
+        self.backed_up=set();self.missing_sources=[];self.scanned_fields={}
         self.base_recipe=dict(self.recipe);self.base_targets=list(targets);self.build=data['game_sha256'].lower();self.learning=False
         self.learn_headers=None;self.learn_samples=[];self.next_learn=0;self.disabled=set();self.write_only=None;self.core=False;self.core_base=None;self.core_delta=None;self.core_pending=[];self.core_next=0;self.core_name=None
         self.hints.update(c['base'] for c in data.get('name_discovery',{}).get('candidates',[]))
@@ -472,7 +483,7 @@ class AutoBackend:
     def use_build(self,digest):
         """Known hash -> saved recipe; learned hash -> learned distance; otherwise learn read-only."""
         if digest==self.build:return
-        self.build=digest;self.learn_headers=None;self.learn_samples=[]
+        self.build=digest;self.learn_headers=None;self.learn_samples=[];self.scanned_fields={}
         self.hints.update(int(h['base']) for h in read().get('auto_hints',[]) if h.get('build','').lower()==digest and h.get('name')==self.name)
         if digest==self.data['game_sha256'].lower():
             self.set_layout(None);self.learning=False;self.core=False;return
@@ -483,6 +494,14 @@ class AutoBackend:
         else:
             # An unseen build: find the stat block by its field pattern instead of a slow name-based learning.
             self.learning=False;self.core=True;self.core_delta=(read().get('core_builds',{}).get(digest) or {}).get('delta')
+            try:
+                if exe_digest(self.data['game_exe'])!=digest:raise RuntimeError('Game executable changed before the stat scan.')
+                code,rva=read_text_section(self.data['game_exe']);matches=find_stat_writer_candidates(code,rva)
+                if exe_digest(self.data['game_exe'])!=digest:raise RuntimeError('Game executable changed during the stat scan.')
+                if len(matches)==1 and digest in VERIFIED_STAT_WRITER_BUILDS:self.scanned_fields=matches[0]['field_offsets']
+                trainer_log(f'stat writer scan for {digest[:12]}: {len(matches)} structural match(es); '+('verified build' if self.scanned_fields else 'using existing verification'))
+            except Exception as error:
+                trainer_log(f'stat writer scan failed for {digest[:12]}: {error!r}')
     def set_layout(self,learned):
         """Install a learned (or the original) layout; unverified fields are never written."""
         recipe=dict(self.base_recipe);skip=set();moved={}
@@ -595,8 +614,11 @@ class AutoBackend:
                 if attempt==2:raise
                 if self.signal.wait(.005):raise InterruptedError('Stop requested.')
     def applied_names(self):
-        if self.core:return ['Damage','Area']+[n for n in CORE_PRIORITY[2:] if n in CORE_FIELDS.get(self.build,{})]
+        if self.core:return ['Damage','Area']+[n for n in CORE_PRIORITY[2:] if n in self.scanned_fields or n in CORE_FIELDS.get(self.build,{}) or n in self.verified_extra_fields()]
         return [t[0] for t in self.targets if not self.write_only or t[0] in self.write_only]
+    def verified_extra_fields(self):
+        targets={name:value for name,_,_,value in self.base_targets}
+        return {name:offset for name,(offset,verified_value) in VERIFIED_EXTRA_FIELDS.get(self.build,{}).items() if targets.get(name)==verified_value}
     def at(self,base):
         # Discovery never gets the relaxed health rule for an unknown identity.
         return actor_snapshot(self.memory,self.process,base,self.recipe,self.name)
@@ -701,7 +723,7 @@ class AutoBackend:
         pid,created=self.generation[0],self.generation[1];base=self.core_base;name=self.core_name
         def store(d):
             old=d.setdefault('core_builds',{}).get(digest) or {}
-            d['core_builds'][digest]=dict(delta=delta,found=time.time(),pid=pid,created=created,base=base,name=name or old.get('name'))
+            d['core_builds'][digest]={**old,**dict(delta=delta,found=time.time(),pid=pid,created=created,base=base,name=name or old.get('name'))}
         update_session(store)
         return [self.core_candidate(self.core_base)]
     def panel_percents(self):
@@ -740,11 +762,12 @@ class AutoBackend:
         # Repoll and freeze: the game resets Damage and Area on each level-up, so they are rewritten every pass while the run is active.
         base=candidate['base'];fields={'Damage':4};pins=[]
         for name in ('Area','Luck','Gold Bonus'):
-            offset=CORE_FIELDS.get(self.build,{}).get(name)
+            offset=self.scanned_fields.get(name,CORE_FIELDS.get(self.build,{}).get(name))
             if offset is None and name=='Area' and self.area_offset is None:self.verify_area(base)
             if offset is None and name in self.VERIFY_SOURCE and not (name=='Area' and self.area_offset is not None):offset=self.verify_field(base,name)  # Area already verified: do not check it twice
             if offset is None and name=='Area':offset=self.area_offset
             if offset is not None:fields[name]=offset
+        fields.update(self.verified_extra_fields())
         fields={name:fields[name] for name in CORE_PRIORITY if name in fields}
         for name,offset in fields.items():
             want=next((v for n,o,f,v in self.base_targets if n==name),None)
@@ -755,7 +778,7 @@ class AutoBackend:
             if self.signal.wait(0):raise InterruptedError('Stop requested.')
             if n%10==0:self.core_candidate(base)  # stop at once if the record moved or changed shape
             for name,address,target,want in pins:
-                if name not in FIRST_PRIORITY and n%5:continue  # second priority is checked every fifth pass
+                if n%CORE_INTERVALS[name]:continue
                 if self.memory.read_bytes(address,4)!=target:self.memory.write_bytes(address,target);writes+=1
             n+=1;time.sleep(.02)
         return dict(writes=writes,values=dict(candidate['values'],**{name:want for name,address,target,want in pins}))
@@ -1115,7 +1138,7 @@ def write_batch(memory, changes, guard):
 def read():
     """Read session.json. A corrupt file is kept as a dated backup and replaced by a fresh copy of the example profile."""
     try:return json.loads(SESSION.read_text(encoding='utf-8'))
-    except (OSError,ValueError) as error:
+    except ValueError as error:
         if not SESSION.exists():raise
         backup=SESSION.with_name(f'session.corrupt-{time.strftime("%Y%m%d-%H%M%S")}.json')
         try:SESSION.replace(backup)
@@ -2809,6 +2832,26 @@ def talent_patch_bytes(original_hex, cap):
     if not 1 <= cap <= 999:raise ValueError('Talent cap must be 1 to 999.')
     struct.pack_into('<I', raw, offset, cap);return bytes(raw)
 
+def find_stat_writer_candidates(code, base_rva=0):
+    """Find stat-writer-shaped code for diagnosis, not permission to write an unknown build.
+
+    The candidate is a bounded byte-pattern match, not a full disassembly or proof of field semantics.
+    """
+    import re
+    anchor_pattern=re.compile(rb'\xf3[\x40-\x4f]?\x0f\x5c[\x86\x8e\x96\x9e\xa6\xae\xb6\xbe](.{4})',re.S)
+    store_pattern=re.compile(rb'(\xf3[\x40-\x4f]?\x0f\x11|\x0f\x13)[\x86\x8e\x96\x9e\xa6\xae\xb6\xbe](.{4})',re.S)
+    required=[0,4,8,12,20,24,28,32,36,40,44,48,52]
+    results=[]
+    for match in anchor_pattern.finditer(code):
+        anchor=struct.unpack('<I',match.group(1))[0]
+        if not 0x100<=anchor<=0x4000:continue
+        writes=[(struct.unpack('<I',m.group(2))[0]-anchor,m.group(1)) for m in store_pattern.finditer(code,match.end(),min(len(code),match.start()+350))]
+        offsets=[offset for offset,_ in writes]
+        if offsets[:len(required)]!=required:continue
+        if writes[3][1]!=b'\x0f\x13' or any(not op.startswith(b'\xf3') for _,op in writes[:3]+writes[4:len(required)]):continue
+        results.append(dict(rva=base_rva+match.start(),object_stat_offset=anchor,field_offsets={'Damage':4,'Area':44,'Luck':48,'Gold Bonus':52}))
+    return results
+
 def find_talent_cap_sites(code, base_rva=0):
     """The talent point cap. Points come from a loop whose running cost ends at 875 (0x36b) when the cap is reached, and
     then returns 51. Each inlined copy is: cmp reg,0x36b ; jne loop ; mov reg,51. Matching the whole pattern (not just
@@ -3490,6 +3533,70 @@ def gui():
 def self_test():
     import unittest
     class Tests(unittest.TestCase):
+        def test_extra_stat_requires_the_tested_value(self):
+            backend=object.__new__(AutoBackend)
+            backend.build='6ca5f4ba4eb6b26716e4b7d9e03cbd25ddafe7582dcd8e55333e070a28058afa'
+            backend.base_targets=[('Experience',28,'f',1000.99),('Crit',12,'f',99.99)]
+            self.assertEqual(backend.verified_extra_fields(),{'Crit':12})
+            backend.base_targets[0]=('Experience',28,'f',3.)
+            self.assertEqual(backend.verified_extra_fields(),{'Crit':12,'Experience':28})
+        def test_transient_session_read_error_does_not_reset_configuration(self):
+            from unittest.mock import patch
+            with patch.object(Path,'read_text',side_effect=PermissionError('temporarily locked')),patch.dict(globals(),save=lambda data:self.fail('must not replace a valid session')):
+                with self.assertRaises(PermissionError):read()
+        def test_core_freeze_checks_stats_in_priority_order(self):
+            from unittest.mock import patch
+            class Memory:
+                def __init__(self):self.writes=[]
+                def read_bytes(self,address,size):return bytes(size)
+                def write_bytes(self,address,value):self.writes.append(address)
+            class Signal:
+                def wait(self,seconds):return False
+            backend=object.__new__(AutoBackend);backend.build='test';backend.area_offset=None
+            backend.scanned_fields={'Area':44,'Luck':48,'Gold Bonus':52};backend.disabled=set()
+            backend.base_targets=[(name,0,'f',2.) for name in CORE_PRIORITY]
+            backend.memory=Memory();backend.signal=Signal();backend.core_candidate=lambda base:None
+            ticks=iter([0.]+[i*.02 for i in range(21)]+[1.])
+            with patch.object(time,'monotonic',side_effect=lambda:next(ticks,1.)),patch.object(time,'sleep'):
+                backend.core_apply({'base':0x1000,'values':{}})
+            writes=backend.memory.writes
+            self.assertEqual(writes[:4],[0x1004,0x102c,0x1030,0x1034])
+            counts=[writes.count(0x1000+offset) for offset in (4,44,48,52)]
+            self.assertGreater(counts[0],counts[1]);self.assertGreater(counts[1],counts[2]);self.assertGreater(counts[2],counts[3])
+        def test_stat_writer_scan_matches_two_real_builds_and_detects_ambiguity(self):
+            import base64,zlib
+            samples=(
+                'eJz7zB+zLYKNgeGzC3/E488u/IIwnuCyGCijLQHE4BeQZZ4Vz/CZP+L0Z/6IO/wauQaf+SPuuvBrsIofL2Zw4Rc5zD/9IL/I0zT+vJtp/AW3GdL4iz7Lp/EXPZZ34Q85zB96x5E/7Aa/8LwUiLmxvOLFTowgC/pyoDZNK2BjYODXiL3wmV9wXgnYVsF9FVDJdTUQgbYGsCLXBBC7BcI+AGJ3QNgbQOweNgYGj27XF51tE9gAfZNGxQ==',
+                'eJz7zB8z7QQrA8NnF/6IK5/5BbdBOYLTzkAZfRdADH4B1enXExk+80f8+ezIH/HUhV8jNADEeuTCr8ErsSiPwYVf5Az/9IOu/CKv0vjzHqbxFzxhSOMv+iKfxl/0RN6FP+SMI3/oU0f+sIf8wsuugM2Mld0f58b4mV9w3h2oZfMesDIw8GukFnzmF1z2BCrY9gLK2PcGrE2w7QNYlasDiP0Fwv4AYv+AsB+A2H9YGRg8ul0lOgGbiE1E')
+            for encoded,anchor in zip(samples,(0x658,0x5c8)):
+                code=zlib.decompress(base64.b64decode(encoded));matches=find_stat_writer_candidates(code,0x1000)
+                self.assertEqual(len(matches),1);self.assertEqual(matches[0]['object_stat_offset'],anchor)
+                self.assertEqual(matches[0]['field_offsets'],{'Damage':4,'Area':44,'Luck':48,'Gold Bonus':52})
+                self.assertEqual(len(find_stat_writer_candidates(code+code)),2)
+                self.assertEqual(find_stat_writer_candidates(code[:100]),[])
+        def test_stat_scan_never_trusts_an_unknown_or_ambiguous_build(self):
+            from unittest.mock import patch
+            data=self.auto_profile_fixture();data['game_exe']='test.exe'
+            backend=AutoBackend(data,None);known=next(iter(VERIFIED_STAT_WRITER_BUILDS))
+            fields={'Damage':4,'Area':44,'Luck':48,'Gold Bonus':52};match={'field_offsets':fields}
+            with patch.dict(globals(),read=lambda:{},read_text_section=lambda path:(b'',0),exe_digest=lambda path:backend.build,trainer_log=lambda message:None):
+                with patch.dict(globals(),find_stat_writer_candidates=lambda code,rva:[match]):
+                    backend.use_build(known);self.assertEqual(backend.scanned_fields,fields)
+                    backend.use_build('b'*64);self.assertEqual(backend.scanned_fields,{})
+                with patch.dict(globals(),find_stat_writer_candidates=lambda code,rva:[match,match]):
+                    backend.use_build(known);self.assertEqual(backend.scanned_fields,{})
+        def test_reacquiring_core_preserves_verified_offsets(self):
+            from unittest.mock import patch
+            data={'core_builds':{'build':{'offsets':{'Luck':48,'Gold Bonus':52},'area_offset':44,'name':'Hero'}}}
+            backend=object.__new__(AutoBackend)
+            backend.core_pending=[(0x20000,912)];backend.build='build';backend.generation=(12,34.);backend.core_name=None
+            backend.core_candidate=lambda base:{'base':base}
+            with patch.dict(globals(),update_session=lambda change:change(data),trainer_log=lambda message:None):
+                self.assertEqual(backend.core_found([0x20000]),[{'base':0x20000}])
+            saved=data['core_builds']['build']
+            self.assertEqual(saved['offsets'],{'Luck':48,'Gold Bonus':52})
+            self.assertEqual(saved['area_offset'],44)
+            self.assertEqual((saved['pid'],saved['base'],saved['name']),(12,0x20000,'Hero'))
         def test_launch_game_uses_install_directory_and_avoids_duplicates(self):
             import tempfile
             from unittest.mock import patch

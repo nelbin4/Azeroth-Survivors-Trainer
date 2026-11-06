@@ -14,14 +14,14 @@ The window shows the status. Press **Stop** to end the trainer, or close the gam
 
 ## What it does
 
-- **Stats:** Damage, Area, Luck and Gold Bonus are set to their maximums and kept there. The trainer re-applies them after each level-up.
+- **Stats:** Damage, Area, Luck and Gold Bonus are prioritized in that order. On a verified game build, the trainer can also apply tested values for Regeneration, Crit, Crit Damage, Armor, Echo, Buff Power, Pickup and Experience.
 - **Talent cap:** **Raise talent cap to 150** raises the game's talent point limit from 51 right away, and again each time the game starts. **Restore 51** puts it back.
 - **Max talents:** **Max Talents** creates a save with every talent at its maximum for one class or all classes. Your current save is backed up first.
 - **Updates:** at startup the window checks GitHub. If a newer version exists, an **Update** button appears. Nothing installs until you press it.
 
 ## Good to know
 
-- Only Damage, Area, Luck and Gold Bonus are applied on this build. Other stats are not applied yet.
+- Extra stats are enabled only for verified game builds and tested configured values. An unknown game update may require on-screen verification; not every stat is available.
 - The game shows new talent points after you refresh the Talents page.
 - The exe is **unsigned**, so Windows SmartScreen or antivirus may warn about it. This is normal for a program that reads another program's memory.
 - Changing a game's memory is never risk-free. The trainer checks before every change, but a game can still crash. Use it at your own risk.

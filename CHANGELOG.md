@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.1.3 (experimental)
+
+- Check Damage, Area, Luck and Gold in that priority order, then apply other verified stats less frequently.
+- For the independently verified game build, support Regeneration, Crit, Crit Damage, Armor, Echo, Buff Power, Pickup and a 3× Experience multiplier when the configured values match those tested. Other builds and values remain subject to verification.
+- Scan the game executable for the stat-writer pattern on a new build. Only independently verified build hashes can use the match without the existing on-screen verification.
+- Keep verified offsets when reacquiring a character, and do not reset the session when a temporary file access error occurs.
+- Short live tests passed; the long-term effects of combined boosts have not been established. Targets, Haste, Health, Speed and other unverified stats are not newly enabled.
+
 ## 2.1.2 (experimental)
 
 - The Talents button is **Max Talents**, and its panel is titled the same.
