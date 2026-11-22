@@ -58,6 +58,8 @@ const GLOW_INTERVAL: Duration = Duration::from_secs(2);
 // Toggled every GLOW_INTERVAL to make the in-game prompt pulse yellow.
 static PROMPT_GLOW: AtomicBool = AtomicBool::new(false);
 const PROCESS_CHECK_INTERVAL: Duration = Duration::from_millis(1500);
+// Indexes into discovery::TARGETS, which is Damage, Area, Luck, Gold Bonus.
+const DISPLAY_ORDER: [usize; 4] = [0, 1, 3, 2];
 const PANEL_PROMPT_HEIGHT: i32 = 360;
 const REPO: &str = "https://github.com/nelbin4/Azeroth-Survivors-Trainer";
 const START: u16 = 100;
@@ -284,7 +286,8 @@ impl Window {
         self.render_cursor = 0;
 
         let active_count = self.active_stats.iter().filter(|&&active| active).count() as i32;
-        let rows = (active_count + 1) / 2;
+        // All four stat cards (two rows) show once any stat is found.
+        let rows = if active_count == 0 { 0 } else { 2 };
         let height = if self.shows_panel_prompt() {
             PANEL_PROMPT_HEIGHT
         } else if rows == 0 {
@@ -516,12 +519,15 @@ impl Window {
 
     fn render_stats(&mut self, hwnd: HWND) {
         self.text(hwnd, "Stats", [18, 146, 220, 20], 0);
-        let targets = discovery::TARGETS
-            .iter()
-            .zip(self.active_stats)
-            .filter_map(|(target, active)| active.then_some(target));
-        for (index, target) in targets.enumerate() {
-            let caption = format!("{}\n{}", target.name, target.displayed_bonus());
+        // Always show all four stats in this order. A stat that is not found yet shows "-".
+        for (index, target_index) in DISPLAY_ORDER.into_iter().enumerate() {
+            let target = &discovery::TARGETS[target_index];
+            let value = if self.active_stats[target_index] {
+                target.displayed_bonus()
+            } else {
+                "-".to_owned()
+            };
+            let caption = format!("{}\n{}", target.name, value);
             let x = 18 + (index % 2) as i32 * 237;
             let y = 173 + (index / 2) as i32 * 62;
             let tile = self.child(
