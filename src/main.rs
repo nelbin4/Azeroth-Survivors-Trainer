@@ -138,6 +138,7 @@ struct Window {
     scan_generation: u64,
     next_capture: Instant,
     capture_error: Option<String>,
+    empty_reads: u8,
     message: String,
     updater: UpdateControl,
     update_message: String,
@@ -779,26 +780,37 @@ impl Window {
                 if self.watching && self.scan_generation == generation {
                     match result {
                         Ok(reading) => {
-                            if let (Some(job), Some(player)) = (&self.discovery, &reading.player) {
-                                job.observe(player.clone());
+                            // A single empty read is usually a flicker, so keep the last values once.
+                            let empty = reading.player.is_none() && reading.stats.is_empty();
+                            if empty && self.reading.player.is_some() && self.empty_reads == 0 {
+                                self.empty_reads = 1;
+                            } else {
+                                self.empty_reads = 0;
+                                if let (Some(job), Some(player)) =
+                                    (&self.discovery, &reading.player)
+                                {
+                                    job.observe(player.clone());
+                                }
+                                let player_name = |reading: &hud::Reading| {
+                                    reading.player.as_ref().map(|player| player.name.clone())
+                                };
+                                let changed = self.capture_error.take().is_some()
+                                    || self.reading.stats != reading.stats
+                                    || self.reading.in_game != reading.in_game
+                                    || player_name(&self.reading) != player_name(&reading);
+                                if changed {
+                                    // Logged only on change, so the log keeps useful history.
+                                    self.log(&format!(
+                                        "Panel read in {} ms (capture {} ms). In game: {}. Player: {}. Values: [{}].",
+                                        reading.total_ms,
+                                        reading.capture_ms,
+                                        if reading.in_game { "yes" } else { "no" },
+                                        describe_player(reading.player.as_ref()),
+                                        reading.stats.join(", ")
+                                    ));
+                                }
+                                self.reading = reading;
                             }
-                            let player_name = |reading: &hud::Reading| {
-                                reading.player.as_ref().map(|player| player.name.clone())
-                            };
-                            let changed = self.capture_error.take().is_some()
-                                || self.reading.stats != reading.stats
-                                || player_name(&self.reading) != player_name(&reading);
-                            if changed {
-                                // Logged only on change, so the log keeps useful history.
-                                self.log(&format!(
-                                    "Panel read in {} ms (capture {} ms). Player: {}. Values: [{}].",
-                                    reading.total_ms,
-                                    reading.capture_ms,
-                                    describe_player(reading.player.as_ref()),
-                                    reading.stats.join(", ")
-                                ));
-                            }
-                            self.reading = reading;
                         }
                         Err(error) if self.capture_error.as_ref() != Some(&error) => {
                             self.log(&format!("Could not read the game window: {error}"));
@@ -817,7 +829,9 @@ impl Window {
         {
             if let Some(process) = self.game_instance {
                 let (sender, receiver) = mpsc::sync_channel(1);
-                self.ocr.request(process.pid, sender);
+                // Read the full frame only while the player has not been found yet.
+                let fallback = self.reading.player.is_none();
+                self.ocr.request(process.pid, fallback, sender);
                 self.capture = Some((self.scan_generation, receiver));
                 // Poll quickly until the panel is read, then back off once the player is known.
                 let interval = if self.reading.player.is_some() {
@@ -838,6 +852,7 @@ impl Window {
         self.discovery_message.clear();
         self.next_discovery = Instant::now();
         self.reading = hud::Reading::default();
+        self.empty_reads = 0;
         self.capture = None;
         self.capture_error = None;
         self.next_capture = Instant::now();
@@ -1241,6 +1256,7 @@ fn run() -> std::io::Result<()> {
             capture: None,
             scan_generation: 0,
             capture_error: None,
+            empty_reads: 0,
             next_capture: Instant::now(),
             message: String::new(),
             updater: UpdateControl::Ready,

@@ -69,7 +69,8 @@ impl Drop for Apartment {
     }
 }
 
-type Request = (u32, SyncSender<Result<Reading, String>>);
+// pid, whether to run the slow full-frame pass, and where to send the reply.
+type Request = (u32, bool, SyncSender<Result<Reading, String>>);
 
 // Owns one OCR engine for the whole session. Creating the engine and its first
 // recognition is slow, so it runs at startup instead of during the first search.
@@ -97,9 +98,9 @@ impl OcrWorker {
                 )),
                 Err(error) => diagnostic_log::error(error),
             }
-            for (pid, reply) in inbox {
+            for (pid, fallback, reply) in inbox {
                 let result = match &engine {
-                    Ok(engine) => read_ocr(engine, pid),
+                    Ok(engine) => read_ocr(engine, pid, fallback),
                     Err(error) => Err(error.clone()),
                 };
                 let _ = reply.send(result);
@@ -112,19 +113,19 @@ impl OcrWorker {
     }
 
     // If the worker has stopped, the reply channel disconnects and the caller reports it.
-    pub fn request(&self, pid: u32, reply: SyncSender<Result<Reading, String>>) {
-        let _ = self.requests.send((pid, reply));
+    pub fn request(&self, pid: u32, fallback: bool, reply: SyncSender<Result<Reading, String>>) {
+        let _ = self.requests.send((pid, fallback, reply));
     }
 }
 
-fn read_ocr(engine: &OcrEngine, pid: u32) -> Result<Reading, String> {
+fn read_ocr(engine: &OcrEngine, pid: u32, fallback: bool) -> Result<Reading, String> {
     let started = Instant::now();
     let frame = capture(pid).map_err(|error| error.to_string())?;
     let captured_in = started.elapsed();
     let captured = Instant::now();
     let image = RgbaImage::from_raw(frame.width as u32, frame.height as u32, frame.pixels)
         .ok_or("Game capture has invalid image dimensions.")?;
-    let stats = read_stat_panels(engine, &image).map_err(|error| error.to_string())?;
+    let stats = read_stat_panels(engine, &image, fallback).map_err(|error| error.to_string())?;
     let in_game = read_hud(engine, &image);
     let player = read_player(engine, &image, &stats, captured);
     Ok(Reading {
@@ -146,7 +147,11 @@ fn read_hud(engine: &OcrEngine, image: &RgbaImage) -> bool {
     })
 }
 
-fn read_stat_panels(engine: &OcrEngine, image: &RgbaImage) -> windows::core::Result<Vec<String>> {
+fn read_stat_panels(
+    engine: &OcrEngine,
+    image: &RgbaImage,
+    fallback: bool,
+) -> windows::core::Result<Vec<String>> {
     let (width, height) = image.dimensions();
     let max_dimension = OcrEngine::MaxImageDimension()?;
     let mut text = String::new();
@@ -171,12 +176,14 @@ fn read_stat_panels(engine: &OcrEngine, image: &RgbaImage) -> windows::core::Res
         text.push_str(&stat_rows(&result)?);
     }
     let stats = stats_from_text(&text);
-    if TARGETS
-        .iter()
-        .any(|target| target.panel_value(&stats).is_some())
+    if !fallback
+        || TARGETS
+            .iter()
+            .any(|target| target.panel_value(&stats).is_some())
     {
         return Ok(stats);
     }
+    // The full-frame pass is slow, so it only runs while the player is not yet known.
     let result = recognize(engine, image.as_raw(), width as usize, height as usize)?;
     Ok(stats_from_text(&stat_rows(&result)?))
 }
