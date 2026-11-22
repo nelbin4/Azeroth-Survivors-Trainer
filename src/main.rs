@@ -540,6 +540,15 @@ impl Window {
             );
             set_font(tile, self.heading_font.handle());
         }
+        // Gold Bonus and Luck can only be seen after an upgrade changes their values.
+        if !self.active_stats[2] || !self.active_stats[3] {
+            self.text(
+                hwnd,
+                "Try upgrading so the trainer can see the difference.",
+                [18, 290, 464, 18],
+                MUTED_TEXT,
+            );
+        }
     }
 
     fn render_footer(&mut self, hwnd: HWND, height: i32) {
