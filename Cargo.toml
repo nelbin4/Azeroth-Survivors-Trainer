@@ -1,6 +1,6 @@
 [package]
 name = "azeroth-survivors-trainer"
-version = "3.0.2"
+version = "3.0.3"
 edition = "2024"
 rust-version = "1.93"
 
