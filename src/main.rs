@@ -14,7 +14,10 @@ use std::{
     os::windows::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     ptr::{null, null_mut},
-    sync::mpsc::{self, Receiver, TryRecvError},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, TryRecvError},
+    },
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
@@ -25,7 +28,7 @@ use windows_sys::Win32::{
             CreateFontW, CreateSolidBrush, DC_BRUSH, DEFAULT_GUI_FONT as UI_FONT, DT_CENTER,
             DT_END_ELLIPSIS, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DeleteObject,
             DrawFocusRect, DrawTextW, FillRect, GetStockObject, HFONT, SelectObject, SetBkMode,
-            SetDCBrushColor, SetTextColor, TRANSPARENT,
+            InvalidateRect, SetDCBrushColor, SetTextColor, TRANSPARENT,
         },
     },
     System::{
@@ -49,7 +52,11 @@ const TITLE: &str = "Azeroth Survivors Trainer";
 const CHARACTER_PANEL_PROMPT: &str =
     "Open the Character Panel (press C) until the trainer finds the value.";
 const CHARACTER_PANEL_PROMPT_LARGE: &str =
-    "Open the Character Panel\r\n(press C)\r\nuntil the trainer finds the value";
+    "Keep Character Panel Open\r\n(Press C)\r\nuntil we find the stats";
+const LOBBY_MESSAGE: &str = "Lobby detected.\r\nEnter a run to begin.";
+const GLOW_INTERVAL: Duration = Duration::from_secs(2);
+// Toggled every GLOW_INTERVAL to make the in-game prompt pulse yellow.
+static PROMPT_GLOW: AtomicBool = AtomicBool::new(false);
 const PROCESS_CHECK_INTERVAL: Duration = Duration::from_millis(1500);
 const PANEL_PROMPT_HEIGHT: i32 = 360;
 const REPO: &str = "https://github.com/nelbin4/Azeroth-Survivors-Trainer";
@@ -66,6 +73,7 @@ const STOP: u16 = 112;
 const MUTED_TEXT: u16 = 113;
 const STAT_CARD: u16 = 115;
 const PANEL_PROMPT: u16 = 118;
+const LOBBY_TEXT: u16 = 119;
 const PROCESS_LOOKUP_LIMIT: u8 = 10;
 const BACKGROUND: u32 = rgb(22, 23, 30);
 const TEXT: u32 = rgb(242, 241, 247);
@@ -111,6 +119,7 @@ struct Window {
     prompt_font: Font,
     ocr: hud::OcrWorker,
     next_process_check: Instant,
+    glow_changed: Instant,
     watching: bool,
     solo_character: Option<String>,
     running: bool,
@@ -353,15 +362,32 @@ impl Window {
             )
     }
 
+    // Pulses the in-game prompt. Only the glow flag changes, and the prompt is repainted.
+    fn tick_glow(&mut self, hwnd: HWND) {
+        if !self.shows_panel_prompt() || !self.reading.in_game {
+            return;
+        }
+        if self.glow_changed.elapsed() < GLOW_INTERVAL {
+            return;
+        }
+        self.glow_changed = Instant::now();
+        let glow = !PROMPT_GLOW.load(Ordering::Relaxed);
+        PROMPT_GLOW.store(glow, Ordering::Relaxed);
+        let prompt = unsafe { GetDlgItem(hwnd, i32::from(PANEL_PROMPT)) };
+        if !prompt.is_null() {
+            unsafe { InvalidateRect(prompt, null(), 1) };
+        }
+    }
+
     fn render_overview(&mut self, hwnd: HWND, rows: i32) {
         let freezing = rows != 0;
         let configured = self.settings.game_path().is_some_and(game::valid_path);
         let (label, action) = if !configured {
             ("Locate game", LOCATE)
         } else if self.watching {
-            ("Stop watcher", STOP)
+            ("Stop", STOP)
         } else {
-            ("Start watcher", START)
+            ("Find", START)
         };
         self.button(hwnd, label, [18, 16, 227, 36], action);
         let (launch_label, launch_action, launch_style) = if self.running {
@@ -382,14 +408,19 @@ impl Window {
         self.text(hwnd, "", [18, 65, 464, 1], DIVIDER);
 
         if self.shows_panel_prompt() {
-            // While the trainer waits for the panel, the prompt takes the whole body.
+            // The prompt takes the whole body. Outside the game it shows the lobby message.
+            let (text, id) = if self.reading.in_game {
+                (CHARACTER_PANEL_PROMPT_LARGE, PANEL_PROMPT)
+            } else {
+                (LOBBY_MESSAGE, LOBBY_TEXT)
+            };
             let prompt = self.child(
                 hwnd,
                 "STATIC",
-                CHARACTER_PANEL_PROMPT_LARGE,
+                text,
                 SS_CENTER | SS_NOPREFIX,
                 [18, 96, 464, 200],
-                PANEL_PROMPT,
+                id,
             );
             set_font(prompt, self.prompt_font.handle());
             return;
@@ -1094,7 +1125,13 @@ extern "system" fn wndproc(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LR
                     READY_DOT => LIVE,
                     STATUS_DOT => rgb(173, 158, 242),
                     MUTED_TEXT => MUTED,
-                    PANEL_PROMPT => rgb(255, 214, 96),
+                    PANEL_PROMPT => {
+                        if PROMPT_GLOW.load(Ordering::Relaxed) {
+                            rgb(255, 236, 96)
+                        } else {
+                            rgb(122, 96, 34)
+                        }
+                    }
                     DIVIDER => {
                         SetDCBrushColor(w as _, BORDER);
                         return GetStockObject(DC_BRUSH) as LRESULT;
@@ -1108,6 +1145,7 @@ extern "system" fn wndproc(hwnd: HWND, message: u32, w: WPARAM, l: LPARAM) -> LR
             WM_TIMER => {
                 let state = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut Window;
                 if let Some(state) = state.as_mut() {
+                    state.tick_glow(hwnd);
                     let process_changed = state.refresh_process();
                     let update_changed = state.poll_update();
                     if process_changed || update_changed {
@@ -1172,6 +1210,7 @@ fn run() -> std::io::Result<()> {
             prompt_font: Font::new(dpi, 26, 700),
             ocr: hud::OcrWorker::start(),
             next_process_check: Instant::now(),
+            glow_changed: Instant::now(),
             watching: solo_character.is_some() || env::args_os().any(|arg| arg == "--autostart"),
             solo_character,
             running: false,

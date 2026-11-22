@@ -33,6 +33,7 @@ pub struct Reading {
     pub player: Option<Player>,
     pub capture_ms: u64,
     pub total_ms: u64,
+    pub in_game: bool,
 }
 
 #[derive(Clone)]
@@ -124,12 +125,24 @@ fn read_ocr(engine: &OcrEngine, pid: u32) -> Result<Reading, String> {
     let image = RgbaImage::from_raw(frame.width as u32, frame.height as u32, frame.pixels)
         .ok_or("Game capture has invalid image dimensions.")?;
     let stats = read_stat_panels(engine, &image).map_err(|error| error.to_string())?;
+    let in_game = read_hud(engine, &image);
     let player = read_player(engine, &image, &stats, captured);
     Ok(Reading {
         stats,
         player,
         capture_ms: captured_in.as_millis() as u64,
         total_ms: started.elapsed().as_millis() as u64,
+        in_game,
+    })
+}
+
+// The in-game HUD shows the kill and gold counters in the top-left corner. The lobby does not.
+fn read_hud(engine: &OcrEngine, image: &RgbaImage) -> bool {
+    read_crop(engine, image, [0.0, 0.0, 0.2, 0.035]).is_some_and(|text| {
+        let text = text.to_ascii_lowercase();
+        ["kills", "gold", "cache"]
+            .iter()
+            .any(|word| text.contains(word))
     })
 }
 
