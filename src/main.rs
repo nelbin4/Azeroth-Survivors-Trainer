@@ -71,6 +71,7 @@ const STATUS_DOT: u16 = 108;
 const READY_DOT: u16 = 109;
 const DIVIDER: u16 = 110;
 const LOCATE: u16 = 111;
+const LOCATE_EXE: u16 = 120;
 const STOP: u16 = 112;
 const MUTED_TEXT: u16 = 113;
 const STAT_CARD: u16 = 115;
@@ -560,6 +561,7 @@ impl Window {
         }
         self.text(hwnd, "", [18, footer - 8, 464, 1], DIVIDER);
         self.button(hwnd, "GitHub Page", [18, footer, 106, 27], GITHUB);
+        self.button(hwnd, "Locate exe", [130, footer, 106, 27], LOCATE_EXE);
         let (label, style) = match self.updater {
             UpdateControl::Ready => ("Check updates", 0),
             UpdateControl::Checking(_) => ("Checking..", WS_DISABLED),
@@ -572,7 +574,7 @@ impl Window {
             "BUTTON",
             label,
             WS_TABSTOP | BS_OWNERDRAW as u32 | style,
-            [226, footer, 164, 27],
+            [242, footer, 150, 27],
             CHECK_UPDATES,
         );
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
@@ -965,6 +967,11 @@ impl Window {
                 }
             }
             GITHUB => open(hwnd, REPO),
+            LOCATE_EXE => {
+                // Retarget the game executable. A failed pick keeps the old target and shows a message.
+                self.choose_game(hwnd);
+                self.render(hwnd);
+            }
             CHECK_UPDATES => self.use_update_button(),
             _ => return,
         }
